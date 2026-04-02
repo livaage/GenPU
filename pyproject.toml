@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68.0", "setuptools-scm>=8.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "genpu"
+version = "0.1.0"
+description = "On-demand pileup generation with hierarchical generative models"
+requires-python = ">=3.10"
+license = "MIT"
+dependencies = [
+    "torch>=2.1",
+    "pyarrow>=14.0",
+    "datasets>=2.16",
+    "numpy>=1.24",
+    "matplotlib>=3.8",
+    "scipy>=1.11",
+    "tqdm>=4.66",
+    "jupyter>=1.0",
+    "ipykernel>=6.27",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "ruff>=0.1",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"

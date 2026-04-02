@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Jupyter
+.ipynb_checkpoints/
+notebooks/*.html
+
+# Data & outputs (large files on scratch, not in repo)
+*.npz
+*.arrow
+*.parquet
+*.h5
+*.hdf5
+*.pt
+*.pth
+
+# Plots (regenerated from scripts)
+plots/
+
+# Logs
+*.log
+slurm-*.out
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude
+.claude/

@@ -1,0 +1,17 @@
+name: genpu
+channels:
+  - conda-forge
+  - pytorch
+dependencies:
+  - python>=3.10
+  - pytorch>=2.1
+  - pyarrow>=14.0
+  - numpy>=1.24
+  - matplotlib>=3.8
+  - scipy>=1.11
+  - tqdm>=4.66
+  - jupyter
+  - ipykernel
+  - pip
+  - pip:
+    - datasets>=2.16
