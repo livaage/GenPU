@@ -8,9 +8,9 @@
 #SBATCH --output=/scratch/gpfs/IOJALVO/lv7805/genpu_data/logs/caloflow_%j.out
 #SBATCH --error=/scratch/gpfs/IOJALVO/lv7805/genpu_data/logs/caloflow_%j.err
 
-# M2 calo-flow spike training.
-#   sbatch scripts/submit_train_calo_flow.slurm
-#   sbatch scripts/submit_train_calo_flow.slurm --export=ALL,EXTRA_ARGS="--steps 60000"
+# M2 calo-flow spike training. Args after the script name are forwarded to the
+# python trainer (sbatch passes them as positional args to this script):
+#   sbatch scripts/submit_train_calo_flow.slurm --slice ... --out ... --steps 40000
 
 export MAMBA_ROOT_PREFIX='/scratch/gpfs/IOJALVO/gnn-tracking/object_condensation/micromamba'
 export MAMBA_EXE='/home/lv7805/bin/micromamba'
@@ -22,6 +22,7 @@ echo "GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null || ec
 echo "Start: $(date)"; echo ""
 
 # genpu2 has torch 2.5.1 (the genpu env does not)
-$MAMBA_EXE run -n genpu2 python scripts/train_calo_flow.py ${EXTRA_ARGS:-}
+echo "args: $@"
+$MAMBA_EXE run -n genpu2 python scripts/train_calo_flow.py "$@"
 
 echo ""; echo "End: $(date)"
