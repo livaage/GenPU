@@ -43,3 +43,6 @@ Thumbs.db
 
 # Claude
 .claude/
+
+# wandb offline runs (preserved on v7-caloset; regenerated locally)
+wandb/
