@@ -176,6 +176,15 @@ which is fine-tuned last, not learned first.
   fractions, point count) + per-point model, conditioned on particle features (and later trunk
   embedding). Continuous (x, y, z, E) output; separate deterministic projection onto cells.
 - **This is the de-risking spike — do it first, A/B vs v5 tokenized calo on isolated particles.**
+- **SPIKE RESULT (2026-07-06, photon slice, CaloClouds-lite: Gaussian global head +
+  per-point CFM, 188k params, 40k steps):** GO. Continuous flow matches shower marginals
+  that v5 tokenized AR mean-collapsed on — d_eta/d_phi localisation W=0.010/0.009 (std matched
+  <1%), radial profile near-perfect overlay, total shower logE W=0.105, points/shower mean
+  4.43 vs 4.52. ONE expected failure: per-cell energy spectrum smears below the 50 keV floor
+  (gen emits ~1e-9 GeV cells) — the predicted floor point-mass problem. FIX BEFORE PROCEEDING:
+  model per-cell energy with an explicit floor (censored/clamped likelihood or at-floor
+  Bernoulli), not unconstrained continuous fractions. Then repeat on hadrons (the real test).
+  Code: scripts/build_calo_slice.py, src/genpu/flow/calo_flow.py, train/eval_calo_flow.py.
 - Train and validate on **hadronic showers as first-class citizens**, not just photons/electrons —
   pileup deposits are mostly hadronic.
 - Acceptance: CaloChallenge-style metrics — total energy response and resolution vs true E,
