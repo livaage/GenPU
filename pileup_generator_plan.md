@@ -135,9 +135,14 @@ which is fine-tuned last, not learned first.
 - Simulation: **using pre-simulated ColliderML pu0 (Open Data Detector via ACTS)**; no new
   Geant4 production in v1. Isolated-particle samples are sliced from min-bias via truth
   association rather than sim'd standalone.
-- Produce views: (a) isolated single particles per species (pi+-, K+-, p, n, e, gamma, mu),
-  selected from pu0 by isolation cut; (b) full min-bias events; (c) a small overlaid hard-scatter
-  set reserved for later. All with **truth association** hit -> parent particle.
+- Produce views: (a) per-particle response slices per species (pi+-, K+-, p, n, e, gamma, mu)
+  extracted by **truth association, NOT spatial isolation** — pu0 events are crowded (~862
+  particles/event) so a spatial isolation cut discards almost everything, but `particle_id`
+  (tracker) and `contrib_particle_ids` (calo) give clean per-particle slices anyway; (b) full
+  min-bias events; (c) a small overlaid hard-scatter set reserved for later.
+- Response is low-multiplicity-dominated (data-QA on pu0): only 30.6% of particles leave a
+  tracker hit, 52% leave a calo deposit, 6.9% leave both. The heads MUST model "leaves nothing"
+  as the common case (this is what the stop-token / emergent-count design is for).
 - Schema: event-structured columnar files. Tables: particles [event, i, pdg, p4, vtx,
   bunch_dt(reserved)], tracker_hits [event, i_parent, surface_id, local_xy, energy], calo_deposits
   [event, i_parent(fractional), cell_id, xyz, energy]. Fix the fractional-energy convention for
@@ -220,17 +225,25 @@ which is fine-tuned last, not learned first.
 ## Open questions
 
 1. ~~Detector and sim framework~~ — RESOLVED: pre-simulated ColliderML pu0 (ODD + ACTS + Geant4).
-2. **Tracker target: raw hits vs measurement/cluster level** (blocks M1): DECISION DEFERRED,
-   data-dependent. Inspect what the pu0 tables actually provide (pre-digitization hits? cluster
-   content? truth links? occupancy/cluster-size at target mu) in M0 data-QA, then record the
-   choice here before M1.
-3. **Fractional energy assignment for shared calo cells in truth** (blocks M0 schema): document
-   the convention; carry the fraction in the schema.
-4. **Pre-threshold deposits + explicit digitization vs post-threshold learning** (blocks M2):
-   prefer pre-threshold + explicit digitization if the pu0 data exposes pre-threshold deposits;
-   otherwise learn post-threshold and note it.
-5. **Momentum spectrum for single-particle training** (blocks M0): sample from the min-bias
-   spectrum (which the isolation-slice naturally gives), not flat.
+2. ~~Tracker target: raw hits vs measurement/cluster level~~ — RESOLVED (M0 data-QA, 2026-07-06):
+   **measurement-level**. pu0 tracker_hits carries measured `x,y,z` + pre-digitization
+   `true_x,true_y,true_z` + `surface_id`/`layer_id`/`volume_id` + per-hit `particle_id`. No raw
+   pre-digitization cluster content is exported. We generate measurement-level hits; truth
+   positions are available for residual supervision.
+3. ~~Fractional energy for shared calo cells~~ — RESOLVED: use fractional attribution; it's in the
+   data as `contrib_energies` (per-cell list aligned to `contrib_particle_ids`). ~10.6% of calo
+   cells have >=2 contributors (89.4% single); truth coverage effectively 100%.
+4. ~~Pre-threshold vs post-threshold calo~~ — RESOLVED (M0 data-QA): **post-threshold only**.
+   `total_energy` has a hard floor at 5.0e-5 GeV (50 keV) with a point mass pinned exactly at the
+   floor; no pre-threshold deposits are exported. We learn post-threshold; the calo flow head must
+   handle the floor point mass explicitly (see Known risks).
+5. **Momentum spectrum for per-particle training** (blocks M0): the truth-association slice
+   naturally reproduces the min-bias spectrum — use it as-is, do not reweight to flat.
+6. **Do the pu0 particle lists include Geant secondaries?** (informs decay handling): particles
+   carry `parent_id`, `primary`, and displaced `vx,vy,vz`, suggesting decay daughters ARE present
+   in truth with production vertices. Confirm in M0: if so, training uses them directly and the
+   decay-injection preprocessing is validated against them; injection is only needed at generation
+   time (Pythia primaries in → daughters).
 
 ## Known risks
 
@@ -238,6 +251,12 @@ which is fine-tuned last, not learned first.
   separated subsystems. The bet is that a CaloClouds-style per-point flow is a different animal.
   Mitigation: the M2 spike A/B's against v5 tokenized calo on isolated particles before any
   pipeline is built around it.
+- **Calo energy floor / point mass.** Data-QA (2026-07-06): `total_energy` is post-threshold with
+  a hard floor at 5.0e-5 GeV and a spike of deposits pinned exactly at the floor. A naive
+  continuous flow will smear this point mass across the low-energy tail (which is where most
+  deposits and the threshold interact). Handle explicitly: e.g. model log-energy above the floor
+  as continuous + a separate "at-floor" Bernoulli, or a censored/clamped-energy likelihood.
+  Validate the low-energy cell-spectrum tail against truth in M2 acceptance.
 - **Rare in-detector processes.** Decays removed from the learned model by daughter injection,
   leaving nuclear interactions, conversions, punch-through as the documented failure mode;
   mitigated by per-species tail validation in M1 and training-spectrum choice (OQ5). Fallback:
