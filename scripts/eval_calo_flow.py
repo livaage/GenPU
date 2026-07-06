@@ -46,6 +46,8 @@ def main():
         return np.concatenate(segs), np.array([len(s) for s in segs])
     t_pts, t_n = truth_points(val)
     t_totlogE = glob[val, 0]
+    energy_mode = str(d["energy_mode"]) if "energy_mode" in d else "frac"
+    log_floor = float(d["log_floor"]) if "log_floor" in d else -np.inf
 
     # ---- generate ----
     condS = torch.as_tensor((cond[val] - norm["cond_mean"]) / norm["cond_std"], dtype=torch.float32, device=dev)
@@ -63,18 +65,26 @@ def main():
         p_std = model.points.sample(c_rep, gg_rep, steps=args.steps)
         p = model.unstd_pts(p_std).cpu().numpy()             # [d_eta, d_phi, log_efrac]
 
-    # rebuild per-shower normalised energies -> per-point energy (GeV)
+    # rebuild per-point energy (GeV) and per-shower total, per energy_mode
     g_pts = p.copy()
-    # normalise efrac within each generated shower and scale to sampled total E
     starts = np.concatenate([[0], np.cumsum(g_n)])
     e_point = np.empty(len(g_pts), np.float32)
-    for s in range(len(val)):
-        a, b = starts[s], starts[s+1]
-        if b <= a:
-            continue
-        fr = np.exp(g_pts[a:b, 2]); fr = fr / fr.sum()
-        e_point[a:b] = fr * np.exp(g_totlogE[s])
-    t_e = np.exp(t_pts[:, 2] + np.repeat(t_totlogE, t_n))     # truth per-point energy (GeV)
+    if energy_mode == "abs":
+        # 3rd coord is absolute log E; clamp to the physical floor (-> point mass)
+        g_pts[:, 2] = np.clip(g_pts[:, 2], log_floor, None)
+        e_point = np.exp(g_pts[:, 2]).astype(np.float32)
+        t_e = np.exp(t_pts[:, 2]).astype(np.float32)         # truth per-cell energy (GeV)
+        # total shower E = sum of generated cells
+        g_totlogE = np.array([np.log(e_point[starts[s]:starts[s+1]].sum() + 1e-12)
+                              for s in range(len(val))], np.float32)
+    else:
+        for s in range(len(val)):
+            a, b = starts[s], starts[s+1]
+            if b <= a:
+                continue
+            fr = np.exp(g_pts[a:b, 2]); fr = fr / fr.sum()
+            e_point[a:b] = fr * np.exp(g_totlogE[s])
+        t_e = np.exp(t_pts[:, 2] + np.repeat(t_totlogE, t_n))  # truth per-point energy (GeV)
 
     # ---- metrics (1-D Wasserstein, lower=better) ----
     def W(a, b):

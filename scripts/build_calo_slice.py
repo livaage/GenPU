@@ -4,10 +4,13 @@ Reads the existing stage2 preprocessed npz (particle_features / calo_hits_flat /
 calo_offsets), selects one PDG class (default: photon=2) with >=1 calo deposit,
 and writes per-shower point clouds in a shower-centred, floor-aware frame:
 
-  per point:  (d_eta, d_phi, log_efrac)
+  per point:  (d_eta, d_phi, energy_coord)
      d_eta   = cell_eta - particle_eta
      d_phi   = wrap(cell_phi - particle_phi)   in (-pi, pi]
-     efrac   = e_cell / sum_cells(e)           (shower-normalised, sums to 1)
+     energy_coord depends on --energy_mode:
+       "abs"  (default): log(e_cell) absolute [GeV] — has the physical floor at
+               log(FLOOR); clamp to that floor at generation to recover the point mass
+       "frac": log(e_cell / sum_cells e)  (old behaviour; smears below the floor)
   per shower (global): total_logE = log(sum e),  n_points
 
   conditioning:  [log_pt, eta, log_E_particle, vz]
@@ -34,7 +37,10 @@ def wrap_pi(dphi: np.ndarray) -> np.ndarray:
     return (dphi + np.pi) % (2 * np.pi) - np.pi
 
 
-def build(shards, preproc_dir, pdg_class, min_hits):
+FLOOR_GEV = 5e-5  # zero-suppression floor on calo cell energy (see M0 data-QA)
+
+
+def build(shards, preproc_dir, pdg_class, min_hits, energy_mode):
     cond_list, glob_list, pts_list, lengths = [], [], [], []
     for sh in shards:
         f = Path(preproc_dir) / f"shard_{sh:04d}_stage2.npz"
@@ -58,8 +64,11 @@ def build(shards, preproc_dir, pdg_class, min_hits):
             p_eta = pf[i, PF_ETA]
             d_eta = (hits[:, CH_ETA] - p_eta).astype(np.float32)
             d_phi = wrap_pi(hits[:, CH_PHI] - pf[i, PF_PHI]).astype(np.float32)
-            log_efrac = np.log(np.clip(e / tot, 1e-12, None)).astype(np.float32)
-            pts = np.stack([d_eta, d_phi, log_efrac], axis=1)
+            if energy_mode == "abs":
+                e_coord = np.log(np.clip(e, 1e-12, None)).astype(np.float32)
+            else:  # "frac"
+                e_coord = np.log(np.clip(e / tot, 1e-12, None)).astype(np.float32)
+            pts = np.stack([d_eta, d_phi, e_coord], axis=1)
             log_E_part = np.log(max(float(aux[i, AUX_ENERGY]), 1e-6))
             cond_list.append([pf[i, PF_LOGPT], p_eta, log_E_part, aux[i, AUX_VZ]])
             glob_list.append([np.log(tot), np.log(n)])
@@ -77,13 +86,14 @@ def build(shards, preproc_dir, pdg_class, min_hits):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--preproc_dir", default="/scratch/gpfs/IOJALVO/lv7805/genpu_data/preprocessed")
-    ap.add_argument("--out", default="/scratch/gpfs/IOJALVO/lv7805/genpu_data/calo_slice/photon.npz")
+    ap.add_argument("--out", default="/scratch/gpfs/IOJALVO/lv7805/genpu_data/calo_slice/photon_absE.npz")
     ap.add_argument("--shards", type=int, nargs="+", default=[0, 1, 2])
     ap.add_argument("--pdg_class", type=int, default=2)  # 2 = photon
     ap.add_argument("--min_hits", type=int, default=1)
+    ap.add_argument("--energy_mode", choices=["abs", "frac"], default="abs")
     args = ap.parse_args()
 
-    cond, glob, pts, offsets = build(args.shards, args.preproc_dir, args.pdg_class, args.min_hits)
+    cond, glob, pts, offsets = build(args.shards, args.preproc_dir, args.pdg_class, args.min_hits, args.energy_mode)
     S = cond.shape[0]
 
     # standardisation stats (fit on this slice; saved for train/eval)
@@ -93,7 +103,9 @@ def main():
         "pts_mean": pts.mean(0), "pts_std": pts.std(0) + 1e-6,
     }
     out = Path(args.out); out.parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(out, cond=cond, glob=glob, points_flat=pts, offsets=offsets, **norm)
+    np.savez_compressed(out, cond=cond, glob=glob, points_flat=pts, offsets=offsets,
+                        energy_mode=np.array(args.energy_mode), log_floor=np.array(np.log(FLOOR_GEV), np.float32),
+                        **norm)
 
     npt = np.diff(offsets)
     print(f"\nwrote {out}")
