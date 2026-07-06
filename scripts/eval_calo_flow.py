@@ -97,6 +97,41 @@ def main():
         "log_ecell":  {"W": W(np.log(t_e+1e-12), np.log(e_point+1e-12)), "true_mean": float(np.log(t_e+1e-12).mean()), "gen_mean": float(np.log(e_point+1e-12).mean())},
     }
 
+    # ---- per-PARTICLE diagnostics ----
+    # (a) per-shower observables: energy-weighted width + centroid offset.
+    #     Tests the i.i.d.-points assumption directly (pooled marginals can hide this).
+    def shower_stats(pts, counts, e):
+        off = np.concatenate([[0], np.cumsum(counts)])[:-1]
+        r2 = pts[:, 0] ** 2 + pts[:, 1] ** 2
+        se = np.add.reduceat(e, off)
+        se = np.clip(se, 1e-30, None)
+        width = np.sqrt(np.clip(np.add.reduceat(e * r2, off) / se, 0, None))
+        cx = np.add.reduceat(e * pts[:, 0], off) / se
+        cy = np.add.reduceat(e * pts[:, 1], off) / se
+        return width, np.sqrt(cx ** 2 + cy ** 2)
+    t_w, t_co = shower_stats(t_pts, t_n, t_e)
+    g_w, g_co = shower_stats(g_pts, g_n, e_point)
+    metrics["shower_width"] = {"W": W(t_w, g_w), "true_mean": float(t_w.mean()), "gen_mean": float(g_w.mean())}
+    metrics["centroid_off"] = {"W": W(t_co, g_co), "true_mean": float(t_co.mean()), "gen_mean": float(g_co.mean())}
+
+    # (b) conditional response: bin the SAME particles by their log-E, compare
+    #     truth vs gen response WITHIN each bin (does response track conditioning?).
+    part_logE = cond[val, 2]
+    edges = np.quantile(part_logE, np.linspace(0, 1, 5))
+    edges[-1] += 1e-6
+    cond_rows = []
+    for b in range(4):
+        m = (part_logE >= edges[b]) & (part_logE < edges[b + 1])
+        if m.sum() == 0:
+            continue
+        cond_rows.append({
+            "bin": f"[{edges[b]:.1f},{edges[b+1]:.1f})", "n": int(m.sum()),
+            "N_true": float(t_n[m].mean()), "N_gen": float(g_n[m].mean()),
+            "logE_true": float(t_totlogE[m].mean()), "logE_gen": float(g_totlogE[m].mean()),
+            "w_true": float(t_w[m].mean()), "w_gen": float(g_w[m].mean()),
+        })
+    metrics["conditional_by_particle_logE"] = cond_rows
+
     # ---- plots ----
     outdir = Path(args.ckpt).parent / "eval"; outdir.mkdir(exist_ok=True)
     fig, ax = plt.subplots(2, 3, figsize=(15, 9))
@@ -115,12 +150,34 @@ def main():
     hist((1,2), tr, gr, np.linspace(0,2,60), "radial profile", "sqrt(d_eta^2+d_phi^2)")
     plt.tight_layout(); fig.savefig(outdir / "marginals.png", dpi=110); plt.close(fig)
 
+    # per-particle figure: per-shower observables + conditional response
+    fig2, ax2 = plt.subplots(1, 3, figsize=(15, 4.5))
+    ax2[0].hist(t_w, bins=np.linspace(0, 1.2, 60), density=True, histtype="step", lw=2, label="truth")
+    ax2[0].hist(g_w, bins=np.linspace(0, 1.2, 60), density=True, histtype="step", lw=2, label="gen")
+    ax2[0].set_title("per-shower energy-weighted width"); ax2[0].set_xlabel("width"); ax2[0].legend()
+    ax2[1].hist(t_co, bins=np.linspace(0, 1.0, 60), density=True, histtype="step", lw=2, label="truth")
+    ax2[1].hist(g_co, bins=np.linspace(0, 1.0, 60), density=True, histtype="step", lw=2, label="gen")
+    ax2[1].set_title("per-shower centroid offset"); ax2[1].set_xlabel("|centroid - particle dir|"); ax2[1].legend()
+    ctr = [0.5 * (edges[b] + edges[b + 1]) for b in range(len(cond_rows))]
+    ax2[2].plot(ctr, [r["logE_true"] for r in cond_rows], "o-", label="truth")
+    ax2[2].plot(ctr, [r["logE_gen"] for r in cond_rows], "s--", label="gen")
+    ax2[2].set_title("conditional: shower logE vs particle logE"); ax2[2].set_xlabel("particle logE bin"); ax2[2].set_ylabel("shower logE"); ax2[2].legend()
+    plt.tight_layout(); fig2.savefig(outdir / "per_particle.png", dpi=110); plt.close(fig2)
+
     print("="*60); print("CALO FLOW eval —", Path(args.ckpt).name); print("="*60)
     print(f"val showers: {len(val)}   truth pts: {len(t_pts)}   gen pts: {len(g_pts)}")
+    print("-- pooled marginals --")
     for k, v in metrics.items():
+        if not isinstance(v, dict):
+            continue
         extra = " ".join(f"{kk}={vv:.3f}" for kk, vv in v.items() if kk != "W")
-        print(f"  {k:12s}  W={v['W']:.4f}   {extra}")
-    print(f"\nplots -> {outdir/'marginals.png'}")
+        print(f"  {k:14s}  W={v['W']:.4f}   {extra}")
+    print("-- conditional response by particle logE (per-particle fidelity) --")
+    print(f"  {'bin':16s} {'n':>6s} | {'N t/g':>13s} | {'logE t/g':>15s} | {'width t/g':>13s}")
+    for r in cond_rows:
+        print(f"  {r['bin']:16s} {r['n']:6d} | {r['N_true']:5.2f}/{r['N_gen']:<5.2f}   "
+              f"| {r['logE_true']:6.2f}/{r['logE_gen']:<6.2f}  | {r['w_true']:5.3f}/{r['w_gen']:<5.3f}")
+    print(f"\nplots -> {outdir/'marginals.png'} , {outdir/'per_particle.png'}")
     (outdir / "metrics.json").write_text(json.dumps(metrics, indent=2))
 
 
