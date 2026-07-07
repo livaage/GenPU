@@ -26,9 +26,9 @@ def main():
 
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     d = np.load(args.slice)
-    norm = {k: d[k] for k in ["cond_mean", "cond_std", "glob_mean", "glob_std", "pts_mean", "pts_std"]}
-    cond, glob, pts, off = d["cond"], d["glob"], d["points_flat"], d["offsets"]
-    S = cond.shape[0]
+    norm = {k: d[k] for k in ["cont_mean", "cont_std", "glob_mean", "glob_std", "pts_mean", "pts_std"]}
+    cont, pdg, glob, pts, off = d["cont"], d["pdg"], d["glob"], d["points_flat"], d["offsets"]
+    S = cont.shape[0]
     rng = np.random.default_rng(0)
     perm = rng.permutation(S); n_val = int(S * args.val_frac)
     val = perm[:n_val]
@@ -50,20 +50,22 @@ def main():
     log_floor = float(d["log_floor"]) if "log_floor" in d else -np.inf
 
     # ---- generate ----
-    condS = torch.as_tensor((cond[val] - norm["cond_mean"]) / norm["cond_std"], dtype=torch.float32, device=dev)
+    contS = torch.as_tensor((cont[val] - norm["cont_mean"]) / norm["cont_std"], dtype=torch.float32, device=dev)
+    pdgT = torch.as_tensor(pdg[val], dtype=torch.long, device=dev)
     with torch.no_grad():
-        g_std = model.glob.sample(condS)
+        ce = model.cond_embed(contS, pdgT)
+        g_std = model.glob.sample(ce)
         g = model.unstd_glob(g_std).cpu().numpy()            # [total_logE, log_n]
     g_totlogE = g[:, 0]
     g_n = np.clip(np.round(np.exp(g[:, 1])).astype(int), 1, int(t_n.max()) + 5)
 
-    # per-point cond/glob repeated by generated N
+    # per-point cond_embed/glob repeated by generated N
     rep = np.repeat(np.arange(len(val)), g_n)
     with torch.no_grad():
-        c_rep = condS[torch.as_tensor(rep, device=dev)]
+        ce_rep = ce[torch.as_tensor(rep, device=dev)]
         gg_rep = g_std[torch.as_tensor(rep, device=dev)]
-        p_std = model.points.sample(c_rep, gg_rep, steps=args.steps)
-        p = model.unstd_pts(p_std).cpu().numpy()             # [d_eta, d_phi, log_efrac]
+        p_std = model.points.sample(ce_rep, gg_rep, steps=args.steps)
+        p = model.unstd_pts(p_std).cpu().numpy()             # [d_eta, d_phi, log_ecell]
 
     # rebuild per-point energy (GeV) and per-shower total, per energy_mode
     g_pts = p.copy()
@@ -116,7 +118,7 @@ def main():
 
     # (b) conditional response: bin the SAME particles by their log-E, compare
     #     truth vs gen response WITHIN each bin (does response track conditioning?).
-    part_logE = cond[val, 2]
+    part_logE = cont[val, 2]  # log_E is index 2 in CONT_FEATURES
     edges = np.quantile(part_logE, np.linspace(0, 1, 5))
     edges[-1] += 1e-6
     cond_rows = []

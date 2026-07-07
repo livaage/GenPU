@@ -41,7 +41,9 @@ FLOOR_GEV = 5e-5  # zero-suppression floor on calo cell energy (see M0 data-QA)
 
 
 def build(shards, preproc_dir, pdg_classes, min_hits, energy_mode):
-    cond_list, glob_list, pts_list, lengths = [], [], [], []
+    # cont features follow genpu.conditioning.CONT_FEATURES:
+    #   log_pt, eta, log_E, charge, mass, vr, vz
+    cont_list, pdg_list, glob_list, pts_list, lengths = [], [], [], [], []
     for sh in shards:
         f = Path(preproc_dir) / f"shard_{sh:04d}_stage2.npz"
         if not f.exists():
@@ -70,20 +72,22 @@ def build(shards, preproc_dir, pdg_classes, min_hits, energy_mode):
                 e_coord = np.log(np.clip(e / tot, 1e-12, None)).astype(np.float32)
             pts = np.stack([d_eta, d_phi, e_coord], axis=1)
             log_E_part = np.log(max(float(aux[i, AUX_ENERGY]), 1e-6))
-            # charge added so the model can set the B-field bend direction
-            # (soft charged hadrons curl hard -> coherent shower offset). phi is
-            # deliberately excluded: the response is phi-invariant by symmetry.
-            cond_list.append([pf[i, PF_LOGPT], p_eta, log_E_part, aux[i, AUX_VZ], pf[i, PF_CHARGE]])
+            vr = float(np.hypot(aux[i, AUX_VX], aux[i, AUX_VY]))
+            # shared conditioning contract (phi excluded — response is phi-invariant)
+            cont_list.append([pf[i, PF_LOGPT], p_eta, log_E_part, pf[i, PF_CHARGE],
+                              pf[i, PF_MASS], vr, aux[i, AUX_VZ]])
+            pdg_list.append(pf[i, PF_PDG])
             glob_list.append([np.log(tot), np.log(n)])
             pts_list.append(pts)
             lengths.append(n)
             n_keep += 1
         print(f"  shard {sh}: {len(sel)} pdg={pdg_classes} particles -> {n_keep} showers (>= {min_hits} hits)")
-    cond = np.asarray(cond_list, np.float32)
+    cont = np.asarray(cont_list, np.float32)
+    pdg = np.asarray(pdg_list, np.float32)
     glob = np.asarray(glob_list, np.float32)
     pts = np.concatenate(pts_list).astype(np.float32)
     offsets = np.concatenate([[0], np.cumsum(lengths)]).astype(np.int32)
-    return cond, glob, pts, offsets
+    return cont, pdg, glob, pts, offsets
 
 
 def main():
@@ -97,17 +101,18 @@ def main():
     ap.add_argument("--energy_mode", choices=["abs", "frac"], default="abs")
     args = ap.parse_args()
 
-    cond, glob, pts, offsets = build(args.shards, args.preproc_dir, args.pdg_class, args.min_hits, args.energy_mode)
-    S = cond.shape[0]
+    cont, pdg, glob, pts, offsets = build(args.shards, args.preproc_dir, args.pdg_class, args.min_hits, args.energy_mode)
+    S = cont.shape[0]
 
-    # standardisation stats (fit on this slice; saved for train/eval)
+    # standardisation stats (fit on this slice; saved for train/eval).
+    # charge/mass have ~zero variance in single-species slices -> +1e-6 guards it.
     norm = {
-        "cond_mean": cond.mean(0), "cond_std": cond.std(0) + 1e-6,
+        "cont_mean": cont.mean(0), "cont_std": cont.std(0) + 1e-6,
         "glob_mean": glob.mean(0), "glob_std": glob.std(0) + 1e-6,
         "pts_mean": pts.mean(0), "pts_std": pts.std(0) + 1e-6,
     }
     out = Path(args.out); out.parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(out, cond=cond, glob=glob, points_flat=pts, offsets=offsets,
+    np.savez_compressed(out, cont=cont, pdg=pdg, glob=glob, points_flat=pts, offsets=offsets,
                         energy_mode=np.array(args.energy_mode), log_floor=np.array(np.log(FLOOR_GEV), np.float32),
                         **norm)
 

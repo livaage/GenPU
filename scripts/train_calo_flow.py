@@ -29,9 +29,9 @@ def main():
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     torch.manual_seed(0)
     d = np.load(args.slice)
-    norm = {k: d[k] for k in ["cond_mean", "cond_std", "glob_mean", "glob_std", "pts_mean", "pts_std"]}
-    cond, glob, pts, off = d["cond"], d["glob"], d["points_flat"], d["offsets"]
-    S = cond.shape[0]
+    norm = {k: d[k] for k in ["cont_mean", "cont_std", "glob_mean", "glob_std", "pts_mean", "pts_std"]}
+    cont, pdg, glob, pts, off = d["cont"], d["pdg"], d["glob"], d["points_flat"], d["offsets"]
+    S = cont.shape[0]
 
     # deterministic shower-level train/val split
     rng = np.random.default_rng(0)
@@ -47,11 +47,12 @@ def main():
     model = CaloFlow(norm).to(dev)
 
     # standardise & move to GPU
-    condS = torch.as_tensor((cond - norm["cond_mean"]) / norm["cond_std"], dtype=torch.float32, device=dev)
+    contS = torch.as_tensor((cont - norm["cont_mean"]) / norm["cont_std"], dtype=torch.float32, device=dev)
+    pdgT = torch.as_tensor(pdg, dtype=torch.long, device=dev)
     globS = torch.as_tensor((glob - norm["glob_mean"]) / norm["glob_std"], dtype=torch.float32, device=dev)
     ptsS = torch.as_tensor((pts - norm["pts_mean"]) / norm["pts_std"], dtype=torch.float32, device=dev)
-    pt_condS = condS[torch.as_tensor(point_shower, device=dev)]
-    pt_globS = globS[torch.as_tensor(point_shower, device=dev)]
+    psh = torch.as_tensor(point_shower, device=dev)
+    pt_contS, pt_pdg, pt_globS = contS[psh], pdgT[psh], globS[psh]
     tr_pt_idx = torch.as_tensor(np.where(tr_pt)[0], device=dev)
     tr_sh_idx = torch.as_tensor(np.where(tr_sh)[0], device=dev)
     va_pt_idx = torch.as_tensor(np.where(~tr_pt)[0], device=dev)
@@ -75,9 +76,10 @@ def main():
         model.eval()
         with torch.no_grad():
             pi = va_pt_idx[torch.randint(len(va_pt_idx), (args.pt_batch,), device=dev)]
-            cfm = model.points.cfm_loss(ptsS[pi], pt_condS[pi], pt_globS[pi]).item()
+            ce = model.cond_embed(pt_contS[pi], pt_pdg[pi])
+            cfm = model.points.cfm_loss(ptsS[pi], ce, pt_globS[pi]).item()
             si = va_sh_idx[torch.randint(len(va_sh_idx), (args.glob_batch,), device=dev)]
-            g = model.glob.nll(condS[si], globS[si]).item()
+            g = model.glob.nll(model.cond_embed(contS[si], pdgT[si]), globS[si]).item()
         model.train()
         return cfm, g
 
@@ -85,8 +87,8 @@ def main():
     for step in range(1, args.steps + 1):
         pi = tr_pt_idx[torch.randint(len(tr_pt_idx), (args.pt_batch,), device=dev)]
         si = tr_sh_idx[torch.randint(len(tr_sh_idx), (args.glob_batch,), device=dev)]
-        cfm = model.points.cfm_loss(ptsS[pi], pt_condS[pi], pt_globS[pi])
-        gnll = model.glob.nll(condS[si], globS[si])
+        cfm = model.points.cfm_loss(ptsS[pi], model.cond_embed(pt_contS[pi], pt_pdg[pi]), pt_globS[pi])
+        gnll = model.glob.nll(model.cond_embed(contS[si], pdgT[si]), globS[si])
         loss = cfm + args.glob_weight * gnll
         opt.zero_grad(); loss.backward(); opt.step()
 
