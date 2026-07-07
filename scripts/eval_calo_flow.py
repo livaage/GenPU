@@ -66,7 +66,7 @@ def main():
         ce_rep = ce[torch.as_tensor(rep, device=dev)]
         gg_rep = g_std[torch.as_tensor(rep, device=dev)]
         pos_std = model.points.sample(ce_rep, gg_rep, steps=args.steps)   # (P,2) standardised
-        logE = model.energy.sample(ce_rep, gg_rep, pos_std, model.log_floor)  # (P,) physical, floored
+        logE = model.energy.sample(ce_rep, gg_rep, model.log_floor)  # (P,) physical, floored
         pos = model.unstd_pos(pos_std).cpu().numpy()
         g_pts = np.concatenate([pos, logE[:, None].cpu().numpy()], axis=1)  # [d_eta,d_phi,log_ecell]
 
