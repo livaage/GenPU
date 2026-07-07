@@ -165,6 +165,16 @@ which is fine-tuned last, not learned first.
   coords, continuous energy/ToT); sequence ordered by radius; stop token terminates.
 - Losses: cross-entropy on discrete tokens, likelihood (flow head) or regression + noise model
   on continuous features. Per-particle supervision via truth association — no set matching needed.
+- **M1 RESULT (charged pions, 1.62M tracks, tokenized AR on the shared contract):** ported and
+  functional — trains healthily (teacher-forced val layer-CE 0.37), conditioning plumbing works
+  (conditional hit-count tracks particle energy). BUT free-running generation marginals are rough:
+  layer occupancy drifts to busiest layers (mean 18.9->21.0, W=2.66) and r/phi residuals narrow
+  (std 0.80/0.88 vs 1.0). Diagnosis: (a) undertrained — loss still dropping at 40k (calo converged
+  by 8k); (b) exposure bias — teacher-forced fine, free-running drifts. First fix (cheap): train
+  longer (150k run launched). Deeper fix for occupancy drift / per-track coherence: scheduled
+  sampling or the helix-residual plan below. Quality judged at M4 gate, not polished in isolation.
+  NOTE: data layout is (M,5)=[layer_class,r,phi,z,time] (col0 already class), not the (M,6) I
+  first assumed. No count head yet (eval conditions on truth hit-count).
 - Acceptance (per species, not aggregated): hit-multiplicity distributions **including tails**
   (tail risk here is material effects — nuclear interactions, conversions, punch-through — not
   decays, which M0 handles); residuals of hit positions vs truth per layer; fraction of particles
