@@ -13,7 +13,7 @@ and writes per-shower point clouds in a shower-centred, floor-aware frame:
        "frac": log(e_cell / sum_cells e)  (old behaviour; smears below the floor)
   per shower (global): total_logE = log(sum e),  n_points
 
-  conditioning:  [log_pt, eta, log_E_particle, vz]
+  conditioning:  [log_pt, eta, log_E_particle, vz, charge]
 
 Output npz:
   cond          (S, 4)         float32   per-shower conditioning
@@ -70,7 +70,10 @@ def build(shards, preproc_dir, pdg_classes, min_hits, energy_mode):
                 e_coord = np.log(np.clip(e / tot, 1e-12, None)).astype(np.float32)
             pts = np.stack([d_eta, d_phi, e_coord], axis=1)
             log_E_part = np.log(max(float(aux[i, AUX_ENERGY]), 1e-6))
-            cond_list.append([pf[i, PF_LOGPT], p_eta, log_E_part, aux[i, AUX_VZ]])
+            # charge added so the model can set the B-field bend direction
+            # (soft charged hadrons curl hard -> coherent shower offset). phi is
+            # deliberately excluded: the response is phi-invariant by symmetry.
+            cond_list.append([pf[i, PF_LOGPT], p_eta, log_E_part, aux[i, AUX_VZ], pf[i, PF_CHARGE]])
             glob_list.append([np.log(tot), np.log(n)])
             pts_list.append(pts)
             lengths.append(n)

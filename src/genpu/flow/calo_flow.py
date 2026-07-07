@@ -97,8 +97,9 @@ class CaloFlow(nn.Module):
 
     def __init__(self, norm, hidden_pt=256):
         super().__init__()
-        self.glob = GlobalHead(cond_dim=4)
-        self.points = PointCFM(hidden=hidden_pt)
+        cond_dim = int(len(norm["cond_mean"]))
+        self.glob = GlobalHead(cond_dim=cond_dim)
+        self.points = PointCFM(cond_dim=cond_dim, hidden=hidden_pt)
         for k, v in norm.items():
             self.register_buffer(k, torch.as_tensor(v, dtype=torch.float32))
 
