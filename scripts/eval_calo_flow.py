@@ -59,34 +59,22 @@ def main():
     g_totlogE = g[:, 0]
     g_n = np.clip(np.round(np.exp(g[:, 1])).astype(int), 1, int(t_n.max()) + 5)
 
-    # per-point cond_embed/glob repeated by generated N
+    # per-point cond_embed/glob repeated by generated N; sample position (2D flow)
+    # then energy (floor Bernoulli + Gaussian-above) conditioned on that position.
     rep = np.repeat(np.arange(len(val)), g_n)
     with torch.no_grad():
         ce_rep = ce[torch.as_tensor(rep, device=dev)]
         gg_rep = g_std[torch.as_tensor(rep, device=dev)]
-        p_std = model.points.sample(ce_rep, gg_rep, steps=args.steps)
-        p = model.unstd_pts(p_std).cpu().numpy()             # [d_eta, d_phi, log_ecell]
+        pos_std = model.points.sample(ce_rep, gg_rep, steps=args.steps)   # (P,2) standardised
+        logE = model.energy.sample(ce_rep, gg_rep, pos_std, model.log_floor)  # (P,) physical, floored
+        pos = model.unstd_pos(pos_std).cpu().numpy()
+        g_pts = np.concatenate([pos, logE[:, None].cpu().numpy()], axis=1)  # [d_eta,d_phi,log_ecell]
 
-    # rebuild per-point energy (GeV) and per-shower total, per energy_mode
-    g_pts = p.copy()
     starts = np.concatenate([[0], np.cumsum(g_n)])
-    e_point = np.empty(len(g_pts), np.float32)
-    if energy_mode == "abs":
-        # 3rd coord is absolute log E; clamp to the physical floor (-> point mass)
-        g_pts[:, 2] = np.clip(g_pts[:, 2], log_floor, None)
-        e_point = np.exp(g_pts[:, 2]).astype(np.float32)
-        t_e = np.exp(t_pts[:, 2]).astype(np.float32)         # truth per-cell energy (GeV)
-        # total shower E = sum of generated cells
-        g_totlogE = np.array([np.log(e_point[starts[s]:starts[s+1]].sum() + 1e-12)
-                              for s in range(len(val))], np.float32)
-    else:
-        for s in range(len(val)):
-            a, b = starts[s], starts[s+1]
-            if b <= a:
-                continue
-            fr = np.exp(g_pts[a:b, 2]); fr = fr / fr.sum()
-            e_point[a:b] = fr * np.exp(g_totlogE[s])
-        t_e = np.exp(t_pts[:, 2] + np.repeat(t_totlogE, t_n))  # truth per-point energy (GeV)
+    e_point = np.exp(g_pts[:, 2]).astype(np.float32)
+    t_e = np.exp(t_pts[:, 2]).astype(np.float32)             # truth per-cell energy (GeV)
+    g_totlogE = np.array([np.log(e_point[starts[s]:starts[s+1]].sum() + 1e-12)
+                          for s in range(len(val))], np.float32)
 
     # ---- metrics (1-D Wasserstein, lower=better) ----
     def W(a, b):

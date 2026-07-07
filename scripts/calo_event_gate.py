@@ -107,15 +107,16 @@ def main():
         g_std = model.glob.sample(ce)                       # standardised globals
         g = model.unstd_glob(g_std).cpu().numpy()
     g_n = np.clip(np.round(np.exp(g[:, 1])).astype(int), 1, 128)
-    rep = torch.as_tensor(np.repeat(np.arange(len(sel)), g_n), device=dev)
+    repn = np.repeat(np.arange(len(sel)), g_n)
+    rep = torch.as_tensor(repn, device=dev)
     with torch.no_grad():
-        pstd = model.points.sample(ce[rep], g_std[rep], steps=args.steps)
-        gp = model.unstd_pts(pstd).cpu().numpy()
-    gp[:, 2] = np.clip(gp[:, 2], log_floor, None)
-    gen_E = np.exp(gp[:, 2]).astype(np.float32)
-    gen_eta = np.repeat(p_eta, g_n) + gp[:, 0]
-    gen_phi = np.repeat(p_phi, g_n) + gp[:, 1]
-    gen_src = np.repeat(np.arange(len(sel)), g_n)
+        pos_std = model.points.sample(ce[rep], g_std[rep], steps=args.steps)     # (P,2)
+        logE = model.energy.sample(ce[rep], g_std[rep], pos_std, model.log_floor).cpu().numpy()
+        pos = model.unstd_pos(pos_std).cpu().numpy()
+    gen_E = np.exp(logE).astype(np.float32)
+    gen_eta = p_eta[repn] + pos[:, 0]
+    gen_phi = p_phi[repn] + pos[:, 1]
+    gen_src = repn
 
     # ---- group by event, build real & gen event feature rows ----
     ev_of_photon = eid[sel]

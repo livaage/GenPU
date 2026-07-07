@@ -1,16 +1,18 @@
-"""CaloClouds-lite calo shower generator for the M2 spike.
+"""CaloClouds-lite calo shower generator.
 
-Two heads, both conditioned on the SHARED per-particle embedding produced by
-genpu.conditioning.ParticleConditioning (kinematics + vertex + charge + PDG):
-  GlobalHead  — cond_embed -> diagonal Gaussian over standardised globals
-                [total_logE, log_n_points]. Trained with Gaussian NLL.
-  PointCFM    — per-point conditional flow-matching velocity field over
-                standardised points (d_eta, d_phi, log_ecell), conditioned on
-                [cond_embed, global]. Linear-OT CFM; sampled by Euler ODE.
+Heads (all conditioned on the shared genpu.conditioning.ParticleConditioning
+embedding — kinematics + vertex + charge + PDG):
+  GlobalHead  — cond_embed -> Gaussian over standardised globals [total_logE, log_n].
+  PointCFM    — per-point conditional flow-matching over standardised POSITIONS
+                (d_eta, d_phi). Linear-OT CFM, Euler-sampled.
+  EnergyHead  — per-cell energy, conditioned on (cond_embed, global, cell position):
+                an at-floor Bernoulli + a Gaussian over log-E above the floor.
+                This replaces the earlier "model log-E in the flow then clamp"
+                approach, which over-piled the 50 keV floor (event gate: that pile
+                was the dominant real-vs-gen discriminator, AUC 0.99).
 
-Points within a shower are i.i.d. given (cond, global) — the CaloClouds
-per-point assumption. Shower localisation comes from the shower-centred frame
-(positions relative to the particle direction), not from a latent.
+Points within a shower are i.i.d. given (cond, global); positions localise via the
+shower-centred frame. Energy correlates with position through EnergyHead's pos input.
 """
 from __future__ import annotations
 import torch
@@ -58,10 +60,11 @@ def timestep_embed(t, dim=64):
 
 
 class PointCFM(nn.Module):
-    """Conditional flow-matching velocity field over 3-D standardised points."""
+    """Conditional flow-matching velocity field over 2-D standardised positions."""
 
-    def __init__(self, pt_dim=3, embed_dim=64, glob_dim=2, hidden=256, t_dim=64, cond_hidden=64):
+    def __init__(self, pt_dim=2, embed_dim=64, glob_dim=2, hidden=256, t_dim=64, cond_hidden=64):
         super().__init__()
+        self.pt_dim = pt_dim
         self.cond_enc = mlp([embed_dim + glob_dim, cond_hidden, cond_hidden])
         self.t_dim = t_dim
         self.net = mlp([pt_dim + t_dim + cond_hidden, hidden, hidden, hidden, pt_dim])
@@ -79,7 +82,7 @@ class PointCFM(nn.Module):
     @torch.no_grad()
     def sample(self, cond_embed, glob_std, steps=50):
         c = self.cond_enc(torch.cat([cond_embed, glob_std], dim=-1))
-        x = torch.randn(cond_embed.shape[0], 3, device=cond_embed.device)
+        x = torch.randn(cond_embed.shape[0], self.pt_dim, device=cond_embed.device)
         dt = 1.0 / steps
         for k in range(steps):
             t = torch.full((x.shape[0], 1), k * dt, device=x.device)
@@ -87,16 +90,57 @@ class PointCFM(nn.Module):
         return x
 
 
-class CaloFlow(nn.Module):
-    """Shared conditioning + global head + per-point CFM, with (un)standardisation buffers."""
+class EnergyHead(nn.Module):
+    """Per-cell log-E: at-floor Bernoulli + Gaussian above the floor.
 
-    def __init__(self, norm, embed_dim=64, hidden_pt=256, use_pdg=True):
+    Conditioned on (cond_embed, standardised global, standardised cell position),
+    so shower-core vs edge cells get different energies. Models log-E in PHYSICAL
+    units; the floor is the physical zero-suppression threshold.
+    """
+
+    def __init__(self, embed_dim=64, glob_dim=2, pos_dim=2, hidden=128, floor_eps=0.05):
+        super().__init__()
+        self.net = mlp([embed_dim + glob_dim + pos_dim, hidden, hidden, 3])  # floor_logit, mu, log_sigma
+        self.floor_eps = floor_eps
+
+    def _out(self, cond_embed, glob_std, pos_std):
+        o = self.net(torch.cat([cond_embed, glob_std, pos_std], dim=-1))
+        floor_logit, mu, log_sigma = o[:, 0], o[:, 1], o[:, 2].clamp(-4, 3)
+        return floor_logit, mu, log_sigma
+
+    def loss(self, cond_embed, glob_std, pos_std, logE, log_floor):
+        is_floor = (logE <= log_floor + self.floor_eps).float()
+        floor_logit, mu, log_sigma = self._out(cond_embed, glob_std, pos_std)
+        bce = F.binary_cross_entropy_with_logits(floor_logit, is_floor)
+        # Gaussian NLL on above-floor cells only
+        above = 1.0 - is_floor
+        nll = 0.5 * (((logE - mu) / log_sigma.exp()) ** 2 + 2 * log_sigma)
+        gnll = (nll * above).sum() / above.sum().clamp(min=1.0)
+        return bce + gnll
+
+    @torch.no_grad()
+    def sample(self, cond_embed, glob_std, pos_std, log_floor):
+        floor_logit, mu, log_sigma = self._out(cond_embed, glob_std, pos_std)
+        at_floor = torch.rand_like(floor_logit) < torch.sigmoid(floor_logit)
+        logE = mu + torch.randn_like(mu) * log_sigma.exp()
+        logE = torch.where(at_floor, torch.full_like(logE, log_floor), logE)
+        return logE.clamp(min=log_floor)
+
+
+class CaloFlow(nn.Module):
+    """Shared conditioning + global/position/energy heads, with (un)standardisation buffers."""
+
+    def __init__(self, norm, embed_dim=64, hidden_pt=256, use_pdg=True, log_floor=None):
         super().__init__()
         self.cond = ParticleConditioning(embed_dim=embed_dim, use_pdg=use_pdg)
         self.glob = GlobalHead(embed_dim=embed_dim)
         self.points = PointCFM(embed_dim=embed_dim, hidden=hidden_pt)
+        self.energy = EnergyHead(embed_dim=embed_dim)
         for k, v in norm.items():
             self.register_buffer(k, torch.as_tensor(v, dtype=torch.float32))
+        if log_floor is None:
+            log_floor = float(torch.log(torch.tensor(5e-5)))
+        self.register_buffer("log_floor", torch.tensor(float(log_floor)))
 
     # standardisation helpers
     def std_cont(self, cont):
@@ -105,14 +149,14 @@ class CaloFlow(nn.Module):
     def std_glob(self, glob):
         return (glob - self.glob_mean) / self.glob_std
 
-    def std_pts(self, pts):
-        return (pts - self.pts_mean) / self.pts_std
+    def std_pos(self, pos):
+        return (pos - self.pts_mean[:2]) / self.pts_std[:2]
 
     def unstd_glob(self, g):
         return g * self.glob_std + self.glob_mean
 
-    def unstd_pts(self, p):
-        return p * self.pts_std + self.pts_mean
+    def unstd_pos(self, p):
+        return p * self.pts_std[:2] + self.pts_mean[:2]
 
     def cond_embed(self, cont_std, pdg):
         return self.cond(cont_std, pdg)
