@@ -1,0 +1,28 @@
+#!/bin/bash
+#SBATCH --job-name=genpu-tracker
+#SBATCH --time=03:00:00
+#SBATCH --gres=gpu:1
+#SBATCH --constraint=gpu80
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=48G
+#SBATCH --output=/scratch/gpfs/IOJALVO/lv7805/genpu_data/logs/tracker_%j.out
+#SBATCH --error=/scratch/gpfs/IOJALVO/lv7805/genpu_data/logs/tracker_%j.err
+
+# AR tracker head training. Args after the script name are forwarded to the
+# python trainer (sbatch passes them as positional args to this script):
+#   sbatch scripts/submit_train_tracker.slurm --slice ... --out ... --steps 40000
+
+export MAMBA_ROOT_PREFIX='/scratch/gpfs/IOJALVO/gnn-tracking/object_condensation/micromamba'
+export MAMBA_EXE='/home/lv7805/bin/micromamba'
+export HF_HOME='/scratch/gpfs/IOJALVO/genpu_cache'
+
+cd /home/lv7805/genpu
+echo "Job ID: $SLURM_JOB_ID  Node: $(hostname)"
+echo "GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null || echo N/A)"
+echo "Start: $(date)"; echo ""
+
+# genpu2 has torch 2.5.1 (the genpu env does not)
+echo "args: $@"
+$MAMBA_EXE run -n genpu2 python scripts/train_tracker.py "$@"
+
+echo ""; echo "End: $(date)"
