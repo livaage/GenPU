@@ -93,28 +93,29 @@ class PointCFM(nn.Module):
 class EnergyHead(nn.Module):
     """Per-cell log-E: at-floor Bernoulli + Gaussian above the floor.
 
-    Conditioned on (cond_embed, standardised global) ONLY — deliberately NOT on
-    cell position. Conditioning on position makes the energy a near-deterministic
-    function of position (sharp sigma), which at generation gets slaved to the
-    flow's imperfect positions and blows up the marginal energy spectrum (event
-    gate: too broad + too many floor cells). Modelling the MARGINAL energy per
-    particle is what the gate measures and is robust to position error. log-E is
-    in PHYSICAL units; the floor is the zero-suppression threshold.
+    Conditioned on cond_embed (the PARTICLE features) ONLY — deliberately NOT on
+    cell position or the global (total_logE, log_n). Both of those are SAMPLED /
+    generated quantities; conditioning energy on them makes it a sharp function of
+    a noisy input, so at generation the marginal energy spectrum blows up (event
+    gate: too broad + too many floor cells, even after dropping position). cond is
+    the only NOISE-FREE conditioning (truth particle features at generation), so
+    conditioning energy on cond alone makes the generated per-cell energy marginal
+    match truth by construction. log-E is PHYSICAL; floor = zero-suppression thresh.
     """
 
-    def __init__(self, embed_dim=64, glob_dim=2, hidden=128, floor_eps=0.05):
+    def __init__(self, embed_dim=64, hidden=128, floor_eps=0.05):
         super().__init__()
-        self.net = mlp([embed_dim + glob_dim, hidden, hidden, 3])  # floor_logit, mu, log_sigma
+        self.net = mlp([embed_dim, hidden, hidden, 3])  # floor_logit, mu, log_sigma
         self.floor_eps = floor_eps
 
-    def _out(self, cond_embed, glob_std):
-        o = self.net(torch.cat([cond_embed, glob_std], dim=-1))
+    def _out(self, cond_embed):
+        o = self.net(cond_embed)
         floor_logit, mu, log_sigma = o[:, 0], o[:, 1], o[:, 2].clamp(-4, 3)
         return floor_logit, mu, log_sigma
 
-    def loss(self, cond_embed, glob_std, logE, log_floor):
+    def loss(self, cond_embed, logE, log_floor):
         is_floor = (logE <= log_floor + self.floor_eps).float()
-        floor_logit, mu, log_sigma = self._out(cond_embed, glob_std)
+        floor_logit, mu, log_sigma = self._out(cond_embed)
         bce = F.binary_cross_entropy_with_logits(floor_logit, is_floor)
         # Gaussian NLL on above-floor cells only
         above = 1.0 - is_floor
@@ -123,8 +124,8 @@ class EnergyHead(nn.Module):
         return bce + gnll
 
     @torch.no_grad()
-    def sample(self, cond_embed, glob_std, log_floor):
-        floor_logit, mu, log_sigma = self._out(cond_embed, glob_std)
+    def sample(self, cond_embed, log_floor):
+        floor_logit, mu, log_sigma = self._out(cond_embed)
         at_floor = torch.rand_like(floor_logit) < torch.sigmoid(floor_logit)
         logE = mu + torch.randn_like(mu) * log_sigma.exp()
         logE = torch.where(at_floor, torch.full_like(logE, log_floor), logE)

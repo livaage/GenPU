@@ -111,7 +111,7 @@ def main():
     rep = torch.as_tensor(repn, device=dev)
     with torch.no_grad():
         pos_std = model.points.sample(ce[rep], g_std[rep], steps=args.steps)     # (P,2)
-        logE = model.energy.sample(ce[rep], g_std[rep], model.log_floor).cpu().numpy()
+        logE = model.energy.sample(ce[rep], model.log_floor).cpu().numpy()
         pos = model.unstd_pos(pos_std).cpu().numpy()
     gen_E = np.exp(logE).astype(np.float32)
     gen_eta = p_eta[repn] + pos[:, 0]
