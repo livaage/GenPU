@@ -40,7 +40,7 @@ def wrap_pi(dphi: np.ndarray) -> np.ndarray:
 FLOOR_GEV = 5e-5  # zero-suppression floor on calo cell energy (see M0 data-QA)
 
 
-def build(shards, preproc_dir, pdg_class, min_hits, energy_mode):
+def build(shards, preproc_dir, pdg_classes, min_hits, energy_mode):
     cond_list, glob_list, pts_list, lengths = [], [], [], []
     for sh in shards:
         f = Path(preproc_dir) / f"shard_{sh:04d}_stage2.npz"
@@ -49,7 +49,7 @@ def build(shards, preproc_dir, pdg_class, min_hits, energy_mode):
         d = np.load(f)
         pf, aux = d["particle_features"], d["particle_aux"]
         ch, off = d["calo_hits_flat"], d["calo_offsets"]
-        sel = np.where(pf[:, PF_PDG] == pdg_class)[0]
+        sel = np.where(np.isin(pf[:, PF_PDG], pdg_classes))[0]
         n_keep = 0
         for i in sel:
             a, b = off[i], off[i + 1]
@@ -75,7 +75,7 @@ def build(shards, preproc_dir, pdg_class, min_hits, energy_mode):
             pts_list.append(pts)
             lengths.append(n)
             n_keep += 1
-        print(f"  shard {sh}: {len(sel)} pdg={pdg_class} particles -> {n_keep} showers (>= {min_hits} hits)")
+        print(f"  shard {sh}: {len(sel)} pdg={pdg_classes} particles -> {n_keep} showers (>= {min_hits} hits)")
     cond = np.asarray(cond_list, np.float32)
     glob = np.asarray(glob_list, np.float32)
     pts = np.concatenate(pts_list).astype(np.float32)
@@ -88,7 +88,8 @@ def main():
     ap.add_argument("--preproc_dir", default="/scratch/gpfs/IOJALVO/lv7805/genpu_data/preprocessed")
     ap.add_argument("--out", default="/scratch/gpfs/IOJALVO/lv7805/genpu_data/calo_slice/photon_absE.npz")
     ap.add_argument("--shards", type=int, nargs="+", default=[0, 1, 2])
-    ap.add_argument("--pdg_class", type=int, default=2)  # 2 = photon
+    # PDG classes (see preprocessing.py): 2=photon; 3,4=pi+-; 5,6=K+-; 7,8=p; 9,10=n
+    ap.add_argument("--pdg_class", type=int, nargs="+", default=[2])
     ap.add_argument("--min_hits", type=int, default=1)
     ap.add_argument("--energy_mode", choices=["abs", "frac"], default="abs")
     args = ap.parse_args()
