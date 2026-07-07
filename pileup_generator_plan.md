@@ -209,6 +209,16 @@ which is fine-tuned last, not learned first.
   investing in it. M2 core (the flow-vs-tokenized bet) is validated and characterized.
 - Train and validate on **hadronic showers as first-class citizens**, not just photons/electrons —
   pileup deposits are mostly hadronic.
+- **EVENT-GATE LOOP RESULT (photon-only, M4-lite):** built a thin end-to-end gate (truth
+  photons -> generate showers -> superpose per event -> torch-MLP two-sample test). First run
+  AUC=0.994, driven ENTIRELY by the per-cell energy spectrum (frac_near_floor 0.035->0.27,
+  logE_std 0.76->1.07). Fixed with a floor-mixture energy head (at-floor Bernoulli + Gaussian
+  above floor). KEY LESSON: energy must condition ONLY on noise-free inputs. Conditioning it on
+  cell position (v1) or the sampled global total_logE (v2) made it a sharp function of a quantity
+  that is itself generated -> marginal energy blew up. Conditioning on cond (truth particle
+  features) ONLY (v3) reproduces the marginal by construction. Result: AUC 0.994 -> 0.813, all
+  energy features now Δ/σ<0.25. Remaining 0.81 is a softer multivariate residual (energy-tail
+  shape + count), likely the i.i.d.-points structure — a separate, deeper fix.
 - Acceptance: CaloChallenge-style metrics — total energy response and resolution vs true E,
   layer-wise energy fractions, shower width/depth profiles, cell energy spectrum (check the
   low-energy tail vs threshold), point-count distributions. Per species.
