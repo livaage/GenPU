@@ -185,6 +185,18 @@ which is fine-tuned last, not learned first.
   model per-cell energy with an explicit floor (censored/clamped likelihood or at-floor
   Bernoulli), not unconstrained continuous fractions. Then repeat on hadrons (the real test).
   Code: scripts/build_calo_slice.py, src/genpu/flow/calo_flow.py, train/eval_calo_flow.py.
+- **HADRON RESULT (charged pions, 2.5M showers, 15.6 pts/shower, spread 2-3x photons):**
+  approach holds on the hard case. Localization matched (d_eta/d_phi std 1.06/1.18,
+  W=0.03/0.06), width matched (1.77 vs 1.77), total-E W=0.13. Per-particle conditioning
+  captures REAL physics with dynamic range: energy->N (6->26 across bins) and energy->width
+  (2.58->0.95, more collimated) both tracked. Two residuals: (1) per-cell log-E ~0.36 low
+  (both species); (2) coherent shower centroid offset under-predicted.
+- **CHARGE EXPERIMENT:** adding charge to conditioning moved centroid offset 1.34->1.45
+  (truth 1.73), W 0.385->0.279 — recovered ~28% of the gap. Conclusion: offset deficit is
+  ~1/4 missing-input (now fixed), ~3/4 the i.i.d.-points independence limit. Closing the rest
+  needs INTRA-SHOWER CORRELATION (set-transformer over points, or AR-within-shower), not more
+  conditioning. Deferred: judge whether this residual matters at the M4 classifier gate before
+  investing in it. M2 core (the flow-vs-tokenized bet) is validated and characterized.
 - Train and validate on **hadronic showers as first-class citizens**, not just photons/electrons —
   pileup deposits are mostly hadronic.
 - Acceptance: CaloChallenge-style metrics — total energy response and resolution vs true E,
