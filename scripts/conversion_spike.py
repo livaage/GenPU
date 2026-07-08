@@ -84,6 +84,9 @@ def main():
         opt.zero_grad(); loss.backward(); opt.step()
         if step % 2000 == 0:
             print(f"  step {step} | loss {loss.item():.4f}", flush=True)
+    ckpt = Path(args.out).with_name("photon_conv_model.pt")
+    torch.save({"model": model.state_dict(), "norm": norm}, ckpt)
+    print(f"saved {ckpt}")
 
     # ---- validate on held-out photons ----
     model.eval()
