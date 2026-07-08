@@ -175,6 +175,12 @@ which is fine-tuned last, not learned first.
   sampling or the helix-residual plan below. Quality judged at M4 gate, not polished in isolation.
   NOTE: data layout is (M,5)=[layer_class,r,phi,z,time] (col0 already class), not the (M,6) I
   first assumed. No count head yet (eval conditions on truth hit-count).
+- **TRACKER EVENT GATE (150k ckpt, pion, M4-lite):** AUC=0.997 — exposure-bias defects survive
+  superposition. Discriminated by frac_inner 0.39->0.27 (under-populates inner layers),
+  r_std 267->226 + layer_std 11.5->10.2 (residual/occupancy narrowing). Count/r_mean match
+  (conditioned). So both heads now gated: CALO 0.813 (energy fixed), TRACKER 0.997 (needs a
+  fix). Candidate fixes, cheapest first: sampling temperature >1 (broadens narrowed residuals);
+  then scheduled sampling / the helix-residual physics anchor for the inner-layer occupancy drift.
 - Acceptance (per species, not aggregated): hit-multiplicity distributions **including tails**
   (tail risk here is material effects — nuclear interactions, conversions, punch-through — not
   decays, which M0 handles); residuals of hit positions vs truth per layer; fraction of particles
