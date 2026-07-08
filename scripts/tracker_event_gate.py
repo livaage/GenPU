@@ -58,6 +58,8 @@ def main():
                     help="only for its cont norm buffers")
     ap.add_argument("--pdg_class", type=int, nargs="+", default=[3, 4])
     ap.add_argument("--max_hits", type=int, default=32)
+    ap.add_argument("--layer_temp", type=float, default=1.0)
+    ap.add_argument("--cont_temp", type=float, default=1.0)
     ap.add_argument("--batch", type=int, default=4096)
     ap.add_argument("--max_particles", type=int, default=0, help="0=all; smoke subsample")
     args = ap.parse_args()
@@ -93,7 +95,8 @@ def main():
         with torch.no_grad():
             ce = model.cond_embed(contS[s:e], pdgT[s:e])
             nh = torch.as_tensor(n_true[s:e], device=dev)
-            hits, layers = model.tracker.generate(ce, nh)      # (b,Nmax,4) phys, (b,Nmax)
+            hits, layers = model.tracker.generate(ce, nh, layer_temp=args.layer_temp,
+                                                  cont_temp=args.cont_temp)  # (b,Nmax,4), (b,Nmax)
         hits = hits.cpu().numpy(); layers = layers.cpu().numpy()
         for j in range(e - s):
             k = int(n_true[s + j])

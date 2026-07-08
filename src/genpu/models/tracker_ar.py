@@ -268,8 +268,15 @@ class TrackerARModel(nn.Module):
         self,
         cond: torch.Tensor,
         n_hits: torch.Tensor,
+        layer_temp: float = 1.0,
+        cont_temp: float = 1.0,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Generate tracker hits in physical units.
+
+        layer_temp / cont_temp: sampling temperatures (>1 broadens) for the layer
+        head and the continuous (r,phi,z,time) heads respectively. Free-running AR
+        under-disperses (event gate: narrowed residuals + occupancy drift); temp>1
+        counteracts the peakedness.
 
         Returns:
             hits: (B, N_max, 4) — physical (r, phi, z, time)
@@ -311,12 +318,12 @@ class TrackerARModel(nn.Module):
 
             last_h = h[:, -1]
 
-            # Sample all tokens
-            next_layer = torch.distributions.Categorical(logits=self.layer_head(last_h)).sample()
-            next_r = torch.distributions.Categorical(logits=self.r_head(last_h)).sample()
-            next_phi = torch.distributions.Categorical(logits=self.phi_head(last_h)).sample()
-            next_z = torch.distributions.Categorical(logits=self.z_head(last_h)).sample()
-            next_time = torch.distributions.Categorical(logits=self.time_head(last_h)).sample()
+            # Sample all tokens (logits / temperature broadens the distribution)
+            next_layer = torch.distributions.Categorical(logits=self.layer_head(last_h) / layer_temp).sample()
+            next_r = torch.distributions.Categorical(logits=self.r_head(last_h) / cont_temp).sample()
+            next_phi = torch.distributions.Categorical(logits=self.phi_head(last_h) / cont_temp).sample()
+            next_z = torch.distributions.Categorical(logits=self.z_head(last_h) / cont_temp).sample()
+            next_time = torch.distributions.Categorical(logits=self.time_head(last_h) / cont_temp).sample()
 
             gen_layers[:, step] = torch.where(active, next_layer, gen_layers[:, step])
             gen_r[:, step] = torch.where(active, next_r, gen_r[:, step])
