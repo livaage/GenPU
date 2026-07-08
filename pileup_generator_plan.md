@@ -181,6 +181,14 @@ which is fine-tuned last, not learned first.
   (conditioned). So both heads now gated: CALO 0.813 (energy fixed), TRACKER 0.997 (needs a
   fix). Candidate fixes, cheapest first: sampling temperature >1 (broadens narrowed residuals);
   then scheduled sampling / the helix-residual physics anchor for the inner-layer occupancy drift.
+- **TEMPERATURE SWEEP RESULT (ruled out the cheap fix):** cont_temp {1.0..1.6} x layer_temp
+  {1.0,1.5} — AUC stuck at ~0.997 throughout. cont_temp does NOTHING to r_std (226->227):
+  event-level r_std is set by WHICH layers are hit (barrel vs endcap radii), not within-layer
+  residual. layer_temp helps only marginally. ROOT CAUSE isolated to ONE thing: the AR
+  under-populates INNER layers in free-running (frac_inner 0.39->0.27), which simultaneously
+  narrows r_std and layer_std. It is a directional DRIFT/BIAS (exposure bias), not an entropy
+  deficit -> temperature cannot fix it. Real fix: scheduled sampling or the helix-residual
+  physics anchor (pins layer/position to the analytic trajectory). A proper sub-project.
 - Acceptance (per species, not aggregated): hit-multiplicity distributions **including tails**
   (tail risk here is material effects — nuclear interactions, conversions, punch-through — not
   decays, which M0 handles); residuals of hit positions vs truth per layer; fraction of particles
