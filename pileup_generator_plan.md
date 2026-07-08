@@ -237,6 +237,28 @@ which is fine-tuned last, not learned first.
   layer-wise energy fractions, shower width/depth profiles, cell energy spectrum (check the
   low-energy tail vs threshold), point-count distributions. Per species.
 
+### M0 decay characterization (data finding — reshapes the decay-injection plan)
+
+Ran scripts/analyze_decays.py on pu0 truth (3000 events, 2.6M particles):
+- **91.6% of particles are secondaries** (have a parent / not primary). Only ~8% primaries.
+- Secondary production radius spans the whole detector (median 366mm, out to 3.4m); only
+  ~17% prompt (r<1mm), ~82% displaced (r>20mm).
+- **The displaced daughters are DOMINATED BY MATERIAL EFFECTS, not two-body decays:** parents
+  are gamma (223k -> e+e- conversions), e± (298k -> brem/delta rays), pi± (209k, 2.9 daughters
+  incl. nuclei like deuteron/Si-28 -> nuclear interactions). Genuine analytic-decay species
+  (K0S 5.5k, K0L 5.7k, K± 18k, Lambda) are a SMALL minority.
+
+**Implication:** the clean "sample decay point from ctau/betagamma and inject daughters" scheme
+only covers the genuine-decay minority. The dominant secondary production (conversions, brem,
+nuclear interactions) is material-geometry-dependent and CANNOT be injected analytically — the
+plan already flagged these as "not cleanly separable" but they turn out to be the MAJORITY, not
+a tail. Also: decay/secondary injection is a GENERATION-TIME concern (Pythia-primaries-in). All
+current training/gating uses TRUTH particles as input, which already contain every secondary at
+its vertex — so the per-particle heads already handle secondaries and injection does not block
+current work. When we do switch to Pythia input, material-effect secondary production is a large
+open problem (learned cascade/multiplicity model, or response-model absorption), bigger than the
+analytic decay sampler. Re-scope M0 decay accordingly.
+
 ### M3 — Event-level assembly and occupancy fine-tune
 
 - Introduce the shared trunk over the full particle cloud; heads consume per-particle latents h_i.
