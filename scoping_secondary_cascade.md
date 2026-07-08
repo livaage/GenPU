@@ -72,7 +72,22 @@ already built run on each generated secondary.
 - Cost: learning Geant particle production incl. where conversions/interactions
   happen (implicit material map). Large, variable cardinality.
 
-### Option C — per-DETECTOR hybrid (recommended)
+### DATA VERDICT: Option C is forced (photon-conversion cross-check)
+
+scripts/analyze_conversions.py (3000 events, 362k photons) resolved B-vs-C empirically:
+- Photons only ever have e± daughters (any_daughter_frac == conv_frac in every energy
+  bin). Conversion is characterisable/learnable: conv_r median 515mm (broad, material),
+  e+e- energy split 0.71+-0.15 (asymmetric Beta-like).
+- Conv/any-daughter fraction collapses 89% -> 10% with photon energy. This is NOT
+  physics (conversion is ~E-independent above 100 MeV) — it is a RECORDING split:
+  low-E photons convert in the TRACKER (e± recorded as particles/tracks); ~90% of
+  high-E photons punch through to the CALO and their EM shower is recorded as HITS,
+  with NO daughter particles in the tree.
+- Therefore: the calo-internal cascade is NOT available as a particle tree and CANNOT
+  be generated per-secondary-particle -> calo MUST be inclusive-hits. The tracker
+  cascade IS a clean particle-generation problem. => Option C is structurally forced.
+
+### Option C — per-DETECTOR hybrid (FORCED by the data)
 Split by detector because the two have very different cascade character:
 - **Calo: absorb the cascade (Option A for calo).** Re-attribute calo hits to the
   calo-incident particle and train the calo flow as an inclusive shower generator
