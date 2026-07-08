@@ -104,6 +104,31 @@ Split by detector because the two have very different cascade character:
 - **Genuine decays (~4%): analytic injection** as a cheap, exact add-on (K0S/K0L/
   K±/Lambda via ctau/betagamma), independent of the learned material model.
 
+## 3b. CASCADE GENERATION SPIKES — RESULT (the central bet, VALIDATED both cases)
+
+Tiny cond-only models (conditioned only on the primary's [log_E, eta, vr, vz],
+the noise-free input) generate the secondary-production process; held-out marginals:
+
+**Photon conversions (clean QED)** — scripts/conversion_spike.py, 2.4M photons:
+- convert fraction 61.5% -> 61.5%; log conv_r mean/std 6.07/1.03 matched.
+- e-split 0.711 -> 0.678 (slightly soft — clamped Gaussian on a bounded var; Beta fixes).
+- reproduces the 89%->10% convert-vs-energy curve (the tracker-vs-calo split) from
+  conditioning alone.
+
+**Nuclear interactions (messy hard case)** — scripts/nuclear_spike.py, 2.65M pions:
+- interact fraction 43.8% -> 43.9%; log int_r 5.71/1.13 matched.
+- MULTIPLICITY (the new variable-count challenge) matched mean AND bin-by-bin
+  (m=1..4: 39/21/12/8% truth vs 38/21/13/8% gen) via a categorical head.
+- reproduces the rise-then-collapse interact-vs-energy curve.
+- ONE imperfection: energy balance efrac median 1.22 vs 0.86 (heavy-tailed; a
+  log-transform / floor-mixture-style head fixes it, same lesson as the calo floor).
+
+=> The project's central unproven bet — is `particles | primary` learnable? — is
+VALIDATED for the tracker cascade in BOTH the clean and messy regimes with trivial
+models. What remains for a full tracker cascade: per-daughter kinematics/directions
+(we did counts+radius+energy, not full momenta), then wire generated secondaries
+through the tracker response head and gate at hit level.
+
 ## 4. Implications for the current programme
 
 - **Nothing here blocks current work.** All training/gating uses TRUTH particles as
