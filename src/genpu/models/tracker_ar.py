@@ -74,8 +74,13 @@ class TrackerARModel(nn.Module):
         self.z_embedding = nn.Embedding(N_BINS_SPATIAL, model_dim // 8)
         self.time_embedding = nn.Embedding(N_BINS_TIME, model_dim // 8)
 
-        # Learned position embedding
+        # Learned sequence-position embedding
         self.pos_embedding = nn.Embedding(max_hits, model_dim)
+
+        # ABSOLUTE spatial-position input: per-layer-standardized residuals hide the
+        # trajectory, so also feed each hit's physical (r, phi, z) — [r/1e3, sin phi,
+        # cos phi, z/3e3] — letting causal attention reconstruct the track's helix.
+        self.abspos_proj = nn.Linear(4, model_dim)
 
         # Particle conditioning
         self.cond_proj = nn.Sequential(
@@ -134,14 +139,24 @@ class TrackerARModel(nn.Module):
         z_bins: torch.Tensor,
         time_bins: torch.Tensor,
     ) -> torch.Tensor:
-        """Embed tokenized hit sequence."""
-        return torch.cat([
+        """Embed tokenized hit sequence + each hit's absolute spatial position."""
+        tok = torch.cat([
             self.layer_embedding(layer_classes),
             self.r_embedding(r_bins),
             self.phi_embedding(phi_bins),
             self.z_embedding(z_bins),
             self.time_embedding(time_bins),
         ], dim=-1)
+        # reconstruct physical (r, phi, z) from bins + per-layer stats (bin centers ->
+        # residual -> * std + mean). Consistent at train (true) and generate (own) time.
+        lc = layer_classes.clamp(0, N_LAYERS - 1)
+        lm = self._layer_means[lc]; ls = self._layer_stds[lc]           # (B, N, 4): r,phi,z,time
+        r_phys = self._spatial_centers[r_bins] * ls[..., 0] + lm[..., 0]
+        phi_phys = self._spatial_centers[phi_bins] * ls[..., 1] + lm[..., 1]
+        z_phys = self._spatial_centers[z_bins] * ls[..., 2] + lm[..., 2]
+        abspos = torch.stack([r_phys / 1000.0, torch.sin(phi_phys),
+                              torch.cos(phi_phys), z_phys / 3000.0], dim=-1)
+        return tok + self.abspos_proj(abspos)
 
     def forward(
         self,
