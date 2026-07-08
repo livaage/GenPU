@@ -59,10 +59,16 @@ class TrackerARModel(nn.Module):
         n_heads: int = 4,
         max_hits: int = 32,
         dropout: float = 0.0,
+        use_vertex: bool = False,
     ):
         super().__init__()
         self.model_dim = model_dim
         self.max_hits = max_hits
+        # use_vertex: prepend the particle's production vertex as a trained position-0
+        # token (seeded with its absolute (vr,vz) position), so the FIRST/innermost hit
+        # is predicted from a physical anchor instead of an untrained BOS -> fixes the
+        # inner-layer deficit. Off by default for backward compat with older checkpoints.
+        self.use_vertex = use_vertex
 
         # Token embeddings for each feature
         # Layer: 48 classes + 1 BOS token
@@ -74,13 +80,18 @@ class TrackerARModel(nn.Module):
         self.z_embedding = nn.Embedding(N_BINS_SPATIAL, model_dim // 8)
         self.time_embedding = nn.Embedding(N_BINS_TIME, model_dim // 8)
 
-        # Learned sequence-position embedding
-        self.pos_embedding = nn.Embedding(max_hits, model_dim)
+        # Learned sequence-position embedding (+1 slot for the prepended vertex token)
+        self.pos_embedding = nn.Embedding(max_hits + (1 if use_vertex else 0), model_dim)
 
         # ABSOLUTE spatial-position input: per-layer-standardized residuals hide the
         # trajectory, so also feed each hit's physical (r, phi, z) — [r/1e3, sin phi,
         # cos phi, z/3e3] — letting causal attention reconstruct the track's helix.
         self.abspos_proj = nn.Linear(4, model_dim)
+
+        # Learned vertex/start token (only when use_vertex); combined with the vertex's
+        # absolute position via abspos_proj to seed the sequence.
+        if use_vertex:
+            self.start_token = nn.Parameter(torch.zeros(model_dim))
 
         # Particle conditioning
         self.cond_proj = nn.Sequential(
@@ -158,12 +169,22 @@ class TrackerARModel(nn.Module):
                               torch.cos(phi_phys), z_phys / 3000.0], dim=-1)
         return tok + self.abspos_proj(abspos)
 
+    def _vertex_embed(self, vertex_pos: torch.Tensor) -> torch.Tensor:
+        """Embed the production vertex as the sequence seed. vertex_pos: (B,2) physical
+        [vr, vz]; phi left unknown (0) — vr anchors the radial start (the inner-layer
+        deficit), which is what matters."""
+        vr, vz = vertex_pos[:, 0], vertex_pos[:, 1]
+        zero = torch.zeros_like(vr)
+        abspos = torch.stack([vr / 1000.0, zero, zero, vz / 3000.0], dim=-1)
+        return self.start_token.unsqueeze(0) + self.abspos_proj(abspos)  # (B, D)
+
     def forward(
         self,
         layer_classes: torch.Tensor,
         continuous: torch.Tensor,
         cond: torch.Tensor,
         mask: torch.Tensor,
+        vertex_pos: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
         """Teacher-forced forward pass.
 
@@ -172,24 +193,30 @@ class TrackerARModel(nn.Module):
             continuous: (B, N, 4) float — per-layer-standardized (r, phi, z, time)
             cond: (B, cond_dim) particle embedding
             mask: (B, N) bool
+            vertex_pos: (B, 2) physical [vr, vz] — required when use_vertex.
+        With use_vertex the sequence is [vertex, hit_0..hit_{N-1}] (len N+1) and output
+        position i predicts hit_i; without it, the legacy [hit_0..] with a +1 shift.
         """
         B, N = layer_classes.shape
         device = layer_classes.device
 
         r_bins, phi_bins, z_bins, time_bins = self._tokenize_continuous(continuous)
-
         h = self._embed_hits(layer_classes, r_bins, phi_bins, z_bins, time_bins)
-        pos = self.pos_embedding(torch.arange(N, device=device)).unsqueeze(0)
-        h = h + pos
+
+        if self.use_vertex:
+            v = self._vertex_embed(vertex_pos).unsqueeze(1)          # (B,1,D)
+            h = torch.cat([v, h], dim=1)                             # (B,N+1,D)
+            key_mask = torch.cat([torch.ones(B, 1, dtype=torch.bool, device=device), mask], dim=1)
+        else:
+            key_mask = mask
+        seq = h.shape[1]
+        h = h + self.pos_embedding(torch.arange(seq, device=device)).unsqueeze(0)
 
         memory = self.cond_proj(cond).unsqueeze(1)
-        causal_mask = self._causal_mask(N, device)
-        tgt_key_padding_mask = ~mask
-
         h = self.decoder(
             tgt=h, memory=memory,
-            tgt_mask=causal_mask,
-            tgt_key_padding_mask=tgt_key_padding_mask,
+            tgt_mask=self._causal_mask(seq, device),
+            tgt_key_padding_mask=~key_mask,
         )
 
         return {
@@ -207,37 +234,39 @@ class TrackerARModel(nn.Module):
         cond: torch.Tensor,
         mask: torch.Tensor,
         n_hits: torch.Tensor,
+        vertex_pos: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
         """Compute AR loss: CE for all token types.
 
-        At position i, predict tokens for position i+1.
+        With use_vertex, output position i predicts hit i (vertex is position 0);
+        otherwise legacy shift-by-1.
         """
         B, N = layer_classes.shape
         device = layer_classes.device
 
-        out = self.forward(layer_classes, continuous, cond, mask)
-
-        # Tokenize targets
+        out = self.forward(layer_classes, continuous, cond, mask, vertex_pos)
         r_bins, phi_bins, z_bins, time_bins = self._tokenize_continuous(continuous)
 
-        # Targets: shifted by 1
-        target_layers = torch.zeros_like(layer_classes)
-        target_layers[:, :-1] = layer_classes[:, 1:]
-        target_r = torch.zeros_like(r_bins)
-        target_r[:, :-1] = r_bins[:, 1:]
-        target_phi = torch.zeros_like(phi_bins)
-        target_phi[:, :-1] = phi_bins[:, 1:]
-        target_z = torch.zeros_like(z_bins)
-        target_z[:, :-1] = z_bins[:, 1:]
-        target_time = torch.zeros_like(time_bins)
-        target_time[:, :-1] = time_bins[:, 1:]
-
-        # Valid prediction mask: positions 0..n_hits-2
-        pred_mask = torch.zeros(B, N, dtype=torch.bool, device=device)
-        for b in range(B):
-            nh = n_hits[b].item()
-            if nh > 1:
-                pred_mask[b, :nh - 1] = True
+        if self.use_vertex:
+            # sequence [vertex, hit_0..]; out[:, :N] predicts hits 0..N-1 (no shift).
+            out = {k: v[:, :N].contiguous() for k, v in out.items()}
+            target_layers, target_r, target_phi, target_z, target_time = (
+                layer_classes, r_bins, phi_bins, z_bins, time_bins)
+            pred_mask = torch.zeros(B, N, dtype=torch.bool, device=device)
+            for b in range(B):
+                pred_mask[b, :n_hits[b].item()] = True   # predict ALL hits incl. the first
+        else:
+            # legacy: shift targets by 1 (first hit never predicted)
+            target_layers = torch.zeros_like(layer_classes); target_layers[:, :-1] = layer_classes[:, 1:]
+            target_r = torch.zeros_like(r_bins); target_r[:, :-1] = r_bins[:, 1:]
+            target_phi = torch.zeros_like(phi_bins); target_phi[:, :-1] = phi_bins[:, 1:]
+            target_z = torch.zeros_like(z_bins); target_z[:, :-1] = z_bins[:, 1:]
+            target_time = torch.zeros_like(time_bins); target_time[:, :-1] = time_bins[:, 1:]
+            pred_mask = torch.zeros(B, N, dtype=torch.bool, device=device)
+            for b in range(B):
+                nh = n_hits[b].item()
+                if nh > 1:
+                    pred_mask[b, :nh - 1] = True
 
         if not pred_mask.any():
             zero = torch.tensor(0.0, device=device)
@@ -283,6 +312,7 @@ class TrackerARModel(nn.Module):
         self,
         cond: torch.Tensor,
         n_hits: torch.Tensor,
+        vertex_pos: torch.Tensor | None = None,
         layer_temp: float = 1.0,
         cont_temp: float = 1.0,
     ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -311,20 +341,26 @@ class TrackerARModel(nn.Module):
         gen_time = torch.zeros(B, max_n, dtype=torch.long, device=device)
 
         memory = self.cond_proj(cond).unsqueeze(1)
+        vtok = self._vertex_embed(vertex_pos).unsqueeze(1) if self.use_vertex else None  # (B,1,D)
 
         for step in range(max_n):
             active = n_hits > step
             if not active.any():
                 break
 
-            seq_len = step + 1
-            h = self._embed_hits(
-                gen_layers[:, :seq_len],
-                gen_r[:, :seq_len],
-                gen_phi[:, :seq_len],
-                gen_z[:, :seq_len],
-                gen_time[:, :seq_len],
-            )
+            if self.use_vertex:
+                # sequence = [vertex, hit_0..hit_{step-1}]; last position predicts hit_step
+                if step == 0:
+                    h = vtok
+                else:
+                    h = torch.cat([vtok, self._embed_hits(
+                        gen_layers[:, :step], gen_r[:, :step], gen_phi[:, :step],
+                        gen_z[:, :step], gen_time[:, :step])], dim=1)
+            else:
+                h = self._embed_hits(
+                    gen_layers[:, :step + 1], gen_r[:, :step + 1], gen_phi[:, :step + 1],
+                    gen_z[:, :step + 1], gen_time[:, :step + 1])
+            seq_len = h.shape[1]
             pos = self.pos_embedding(torch.arange(seq_len, device=device)).unsqueeze(0)
             h = h + pos
 

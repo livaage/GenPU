@@ -23,6 +23,7 @@ def main():
     ap.add_argument("--save_every", type=int, default=10000)
     ap.add_argument("--run_name", default="tracker_pion_v1")
     ap.add_argument("--max_particles", type=int, default=0, help="subsample to first N particles (0=all; for CPU smoke tests)")
+    ap.add_argument("--use_vertex", action="store_true", help="seed AR with production vertex (vr,vz)")
     ap.add_argument("--no_wandb", action="store_true")
     args = ap.parse_args()
 
@@ -48,7 +49,7 @@ def main():
     tr_idx = np.where(~val_p)[0]
     va_idx = np.where(val_p)[0]
 
-    model = TrackerModel(norm, max_hits=M).to(dev)
+    model = TrackerModel(norm, max_hits=M, use_vertex=args.use_vertex).to(dev)
 
     # standardise cont on CPU; hits/offsets stay on CPU for per-batch padding.
     contS = ((cont - norm["cont_mean"]) / norm["cont_std"]).astype(np.float32)
@@ -69,15 +70,17 @@ def main():
             mask[j, :nh] = True
         cS = torch.as_tensor(contS[idx], dtype=torch.float32, device=dev)
         pg = torch.as_tensor(pdg[idx], dtype=torch.long, device=dev)
+        # physical vertex (vr, vz) = CONT_FEATURES indices 5,6 (unstandardised)
+        vtx = torch.as_tensor(cont[idx][:, [5, 6]], dtype=torch.float32, device=dev)
         return (torch.as_tensor(layer, device=dev),
                 torch.as_tensor(cont4, device=dev),
                 torch.as_tensor(mask, device=dev),
-                torch.as_tensor(n_hits, device=dev), cS, pg)
+                torch.as_tensor(n_hits, device=dev), cS, pg, vtx)
 
     def step_loss(idx):
-        layer, cont4, mask, nh, cS, pg = make_batch(idx)
+        layer, cont4, mask, nh, cS, pg, vtx = make_batch(idx)
         ce = model.cond_embed(cS, pg)
-        return model.tracker.loss(layer, cont4, ce, mask, nh)
+        return model.tracker.loss(layer, cont4, ce, mask, nh, vertex_pos=vtx)
 
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
     Path(args.out).mkdir(parents=True, exist_ok=True)
