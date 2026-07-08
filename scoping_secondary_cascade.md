@@ -129,6 +129,20 @@ models. What remains for a full tracker cascade: per-daughter kinematics/directi
 (we did counts+radius+energy, not full momenta), then wire generated secondaries
 through the tracker response head and gate at hit level.
 
+## 3c. TRACKER-CASCADE LOOP CLOSED (conversions) — generated cascade -> right HITS
+
+scripts/tracker_cascade_loop.py: for converting photons, run a multi-species
+tracker head (e/pi/p/mu, 100k) on TRUTH e± vs GENERATED e± (conversion model +
+collinear kinematics), compare resulting tracker hits (both through the same head,
+so differences = cascade quality only):
+- layer_class mean 20.4 (truth) vs 19.2 (gen); frac_inner 21.6% vs 23.8%;
+  hit radius 304 vs 285 mm. All within ~1 layer / ~2% / ~6%.
+=> generated conversion cascade reproduces the truth cascade's tracker HIT
+placement, not just particle statistics. The loop is closed for conversions.
+Caveats: isolates cascade from tracker-head error (both via same head); fixed
+n_hits (tests placement not count); gen emits 2 e± vs truth's ~1.5 recorded
+(model the recorded e± count next); collinear-direction approximation.
+
 ## 4. Implications for the current programme
 
 - **Nothing here blocks current work.** All training/gating uses TRUTH particles as
