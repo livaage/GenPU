@@ -257,6 +257,12 @@ which is fine-tuned last, not learned first.
   per-shower AUC 0.73->0.67 (linear 0.55, i.e. remaining is soft nonlinear). Diminishing returns.
   NOTE: the event gate (0.813) is energy-only / spatially blind, so this per-shower fix doesn't
   move it — the event-gate lever is the separate energy-TAIL residual (logE_p90/frac_near_floor).
+- **CALO ENERGY-TAIL FIXED (event gate 0.813 -> 0.643):** replaced the single above-floor Gaussian
+  with an n_mix=3 Gaussian MIXTURE. logE_p90 0.23->0.07, frac_near_floor 0.24->0.09, logE_max->0.05;
+  all event features now Δ/σ<0.13. FULL CALO ARC: tokenized-AR mean-collapse -> flow spike -> floor-
+  mixture 0.994->0.813 -> compactness core-latent (per-shower width fixed) -> energy mixture 0.813->
+  0.643. Best calo checkpoint: photon_coremix_v1 (core latent + mixture energy). Remaining 0.643 is a
+  soft residual. Calo now BETTER than tracker (0.643 vs 0.81) at event level.
 - Acceptance: CaloChallenge-style metrics — total energy response and resolution vs true E,
   layer-wise energy fractions, shower width/depth profiles, cell energy spectrum (check the
   low-energy tail vs threshold), point-count distributions. Per species.
