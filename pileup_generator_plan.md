@@ -295,6 +295,14 @@ which is fine-tuned last, not learned first.
   (~real 9.5); per-shower AUC 0.67->0.61. Best calo = photon_coremixg_v1 (core latent + energy
   mixture + global mixture). Remaining minor: log_E edges (sub-floor tail -11..-10 and high-E
   spike; ~0.7% of cells). Plot regen is now baked into the training watcher.
+- **CALO FLOOR FIX (sub-floor tail recovered) — calo head now comprehensively good.** Narrow
+  at-floor Bernoulli band + mixture over the full continuum (no hard clamp; energy n_mix=4) so the
+  physical sub-floor per-particle contributions survive. cell log_E now matches the FULL range
+  incl. the sub-floor tail (-11..-10) and high-E edge. Cost: frac_near_floor slightly under
+  (0.029 vs 0.035), event gate ~0.67 (within noise of 0.64) — a good trade (sub-floor is real
+  physics). Best calo = photon_coremixgf_v1 (core latent + global mixture + energy mixture +
+  soft floor). Calo status: d_eta/d_phi peaks matched, log_E matched end-to-end, per-shower feats
+  matched, event gate ~0.65 / per-shower ~0.61. DONE.
 - Acceptance: CaloChallenge-style metrics — total energy response and resolution vs true E,
   layer-wise energy fractions, shower width/depth profiles, cell energy spectrum (check the
   low-energy tail vs threshold), point-count distributions. Per species.
