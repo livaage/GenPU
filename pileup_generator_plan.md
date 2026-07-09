@@ -315,6 +315,24 @@ which is fine-tuned last, not learned first.
   smoothness (Gaussian->ODE can't make a delta) + core*delta convolution broadening, NOT
   integration coarseness. More steps won't help. Only fix = a discrete leading-cell component
   (diminishing returns). ACCEPT the tip gap; calo otherwise fully matched.
+- **CALO PEAK CLOSED via bounded NORMAL-QUANTILE normalisation (photon_qt_v1 = new best).**
+  Root cause (peak decomposition): delta flow was fine (0.99); the per-shower CORE (global
+  mixture) plateaued at 0.91 central-concentration even at n_mix=8 — a Gaussian mixture can't
+  fit a leptokurtic near-delta. arcsinh warp on the core BLEW UP (sinh unbounded on mixture
+  tails -> core std 1e6). Fix = normal-quantile transform (empirical inverse-CDF -> exactly
+  Gaussian, so flow+mixture only fit a Gaussian; BOUNDED both ways so no blow-up). Applied to
+  delta(2) + core(glob 2,3); energy/count keep z-score; refs in ckpt buffers. RESULT: core eta
+  0.91->1.05 (std 0.488 vs 0.487, sane), visible d_eta peak 0.87->0.97 (6.5 vs real 6.7),
+  event gate 0.67->0.56, per-shower ~0.61. Minor: d_phi slightly OVER (peak 10.2 vs 9.5,
+  mixture over-peaks in Gaussian space) - tunable. Bonus: n_mix=8 global cut gate 0.67->0.55.
+  LESSON: z-score fixes scale not shape; near-delta peaks need a shape reshape (quantile) or a
+  peak-native model; warp only where the model can't represent a peak, and use a BOUNDED warp.
+- **TRACKER HELIX-Z (enforced z-coherence): DECISIVE NEGATIVE, retire the idea.** Reparametrized
+  z as deviation from analytic trajectory z=vz+(r-vr)sinh(eta)+dev. RESULT: z_r_resid 216->168
+  (matches real 180 - worked as designed!) BUT per-track AUC 0.87->0.868 (FLAT), full-identical
+  0.55->0.88 (WORSE - same-r barrel hits now get identical z), event gate 0.83->0.867 (worse).
+  => z-coherence was NOT the dominant discriminator; fixing it buys ~0 on aggregate + side
+  effects. Helix retired against a measured number. Tracker stays multispecies_vertex (0.81/0.87).
 - Acceptance: CaloChallenge-style metrics — total energy response and resolution vs true E,
   layer-wise energy fractions, shower width/depth profiles, cell energy spectrum (check the
   low-energy tail vs threshold), point-count distributions. Per species.
