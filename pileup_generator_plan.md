@@ -229,6 +229,13 @@ which is fine-tuned last, not learned first.
   contributions, ~0.7% of cells) -> soften the floor to recover the cell log_E sub-floor tail.
   Tracker coherence peaks (z/phi-vs-r): lighter-than-helix option = feed analytic helix next-hit
   position as a CONDITIONING guide (keep tokenized output), not full residual reparametrization.
+- **TRACKER LONGER-TRAINING TEST (150k vs 70k): no improvement, residual is ARCHITECTURAL.**
+  per-track AUC 0.87->0.87, r_mono 0.879->0.872, full-identical 0.55->0.56, z_r_resid 226->216
+  (marginal), phi_r_resid slightly worse, event gate 0.81->0.83. All flat. => tracker is converged;
+  the per-track residual (coherence + identical-barrel over-production) is a model/sampling limit,
+  not undertraining. To improve further needs an architectural change (helix-guide conditioning),
+  NOT more steps. 70k checkpoint was already at the plateau (good early-stop). Tracker status:
+  pooled event gate 0.81, per-track 0.87, converged. Both heads now at their architectural limit.
 - Acceptance (per species, not aggregated): hit-multiplicity distributions **including tails**
   (tail risk here is material effects — nuclear interactions, conversions, punch-through — not
   decays, which M0 handles); residuals of hit positions vs truth per layer; fraction of particles
