@@ -58,12 +58,15 @@ Consequences:
 
 ## 4. Design options (increasing scope)
 
-### Option A — decompose `measured = true trajectory + smearing`
-Model the **true** trajectory (smooth, coherent) and add **per-hit smearing** (`measured − true`,
-a calibrated marginal per detector type) at generation. Pros: cleanly splits the physical noise
-from the model's; smoother target. Cons: predicting the true trajectory autoregressively *still*
-injects per-hit scatter unless combined with a state — so A alone doesn't fix coherence. Best as a
-**target/eval refinement layered under B**.
+### Option A — decompose `measured = true trajectory + smearing` — RULED OUT (measured)
+The smearing check ([tracker_smear_check.py](scripts/tracker_smear_check.py)) shows physical
+smearing is **negligible** (median transverse 0.017, z 0.001 vs a 100s–1000s scale), and
+z_r_resid(true)/z_r_resid(measured) = 0.98 — the measured hits ARE the true trajectory. There is
+nothing to decompose. It also reframed z_r_resid: it's dominated by **trajectory curvature** (a
+linear z-vs-r fit is a poor model), not scatter — so for v2 use a helix/quadratic-fit coherence
+metric. And true r_mono = **1.0000** → the r_mono ties are 100% a binning artifact, confirmed at
+the data level. NET: the coherence spikes are real (smearing≈0), so the ONLY reason gen misses them
+is the model's per-hit sampling floor -> Option B is the right and only lever.
 
 ### Option B — state-carrying AR (the paper's idea, adapted to our data) — RECOMMENDED
 Carry an explicit **trajectory-direction state** per hit. Since we lack per-hit momentum, derive it
