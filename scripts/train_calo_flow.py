@@ -27,6 +27,9 @@ def main():
     ap.add_argument("--pos_transform", choices=["none", "arcsinh", "quantile"], default="none",
                     help="reshape peaked marginals so the flow/mixture fit a Gaussian "
                          "(quantile = bounded normal-quantile normalisation; recommended)")
+    ap.add_argument("--count_dither", action="store_true",
+                    help="dequantize the discrete count: log_n <- log(n + U(-0.5,0.5)) so the "
+                         "continuous mixture can fit the n=1 atom (recovered by round at gen)")
     ap.add_argument("--no_wandb", action="store_true")
     args = ap.parse_args()
 
@@ -53,6 +56,20 @@ def main():
     tr_pt = tr_sh[point_shower]
 
     log_floor = float(d["log_floor"]) if "log_floor" in d else float(np.log(5e-5))
+
+    # dequantize the count: log_n = log(n) is discrete with a big atom at n=1 (~23%), which the
+    # continuous mixture smooths -> gen under-produces single-cell showers (and thus the width=0
+    # / lead_frac=1 / logE_std=0 spikes). Spreading each integer into a continuous block lets the
+    # mixture fit it; round(exp(.)) at generation recovers the integer.
+    if args.count_dither:
+        glob = glob.copy()
+        n = np.round(np.exp(glob[:, 1])).astype(np.float32)
+        glob[:, 1] = np.log(np.clip(n + rng.uniform(-0.5, 0.5, len(n)).astype(np.float32), 0.5, None))
+        norm = dict(norm)
+        gm = norm["glob_mean"].copy(); gs = norm["glob_std"].copy()
+        gm[1] = glob[:, 1].mean(); gs[1] = glob[:, 1].std()
+        norm["glob_mean"] = gm.astype(np.float32); norm["glob_std"] = gs.astype(np.float32)
+        print(f"count dither: log_n mean {gm[1]:.3f} std {gs[1]:.3f}")
 
     # position coordinate warp: arcsinh(delta/s) de-peaks the near-delta d_eta/d_phi so
     # the flow fits a broad distribution; s per-dim = median(|delta|). pts_mean/std are
