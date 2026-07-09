@@ -278,6 +278,14 @@ which is fine-tuned last, not learned first.
   mixture 0.994->0.813 -> compactness core-latent (per-shower width fixed) -> energy mixture 0.813->
   0.643. Best calo checkpoint: photon_coremix_v1 (core latent + mixture energy). Remaining 0.643 is a
   soft residual. Calo now BETTER than tracker (0.643 vs 0.81) at event level.
+- **CALO GLOBAL MIXTURE (d_eta/d_phi peaks recovered):** cell_hists showed gen smeared the sharp
+  central d_eta/d_phi peak. Verified NOT cell-grid discreteness (grid is fine, ~47k unique eta) —
+  the shower CORE distribution is sharply peaked at the particle direction + heavy tails (kurtosis
+  8-20), which the single-Gaussian global head smeared. Fix: n_mix=4 mixture GlobalHead over
+  [total_logE,logN,core_eta,core_phi]. Result: d_eta peak 2.8->5.9 (~real 6.7), d_phi 2.0->8.6
+  (~real 9.5); per-shower AUC 0.67->0.61. Best calo = photon_coremixg_v1 (core latent + energy
+  mixture + global mixture). Remaining minor: log_E edges (sub-floor tail -11..-10 and high-E
+  spike; ~0.7% of cells). Plot regen is now baked into the training watcher.
 - Acceptance: CaloChallenge-style metrics — total energy response and resolution vs true E,
   layer-wise energy fractions, shower width/depth profiles, cell energy spectrum (check the
   low-energy tail vs threshold), point-count distributions. Per species.
