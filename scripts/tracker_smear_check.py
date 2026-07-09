@@ -18,7 +18,7 @@ from pathlib import Path
 import numpy as np
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-from genpu.data import load_shard
+from genpu.data import load_shard, explode_list_columns
 
 
 def zr_resid(r, z):
@@ -35,30 +35,27 @@ def main():
     ap.add_argument("--shard", type=int, default=0)
     ap.add_argument("--n_tracks", type=int, default=20000)
     args = ap.parse_args()
-    t = load_shard("tracker_hits", args.shard)
-    col = {n: t[n].to_numpy(zero_copy_only=False) for n in
-           ["event_id", "particle_id", "x", "y", "z", "true_x", "true_y", "true_z"]}
-    ev, pid = col["event_id"].astype(np.int64), col["particle_id"].astype(np.int64)
-    key = ev * (pid.max() + 1) + pid
-    order = np.argsort(key, kind="stable")
-    key_s = key[order]
-    bounds = np.concatenate([[0], np.where(np.diff(key_s))[0] + 1, [len(key_s)]])
-    rng = np.random.default_rng(0)
-    starts = rng.permutation(len(bounds) - 1)[:args.n_tracks]
-
+    t = load_shard("tracker_hits", args.shard)          # one row per event, list columns
     zrm, zrt, rmm, rmt = [], [], [], []
-    smear_t, smear_z = [], []          # transverse and z smearing per hit
-    for gi in starts:
-        idx = order[bounds[gi]:bounds[gi + 1]]
-        if len(idx) < 3:
-            continue
-        x, y, z = col["x"][idx], col["y"][idx], col["z"][idx]
-        tx, ty, tz = col["true_x"][idx], col["true_y"][idx], col["true_z"][idx]
-        rm, rt = np.hypot(x, y), np.hypot(tx, ty)
-        om, ot = np.argsort(rm), np.argsort(rt)
-        zrm.append(zr_resid(rm[om], z[om])); zrt.append(zr_resid(rt[ot], tz[ot]))
-        rmm.append(r_mono(rm)); rmt.append(r_mono(rt))
-        smear_t.append(np.hypot(x - tx, y - ty)); smear_z.append(np.abs(z - tz))
+    smear_t, smear_z = [], []                            # transverse and z smearing per hit
+    for eidx in range(t.num_rows):
+        ev = explode_list_columns(t, eidx)
+        pid = ev["particle_id"].astype(np.int64)
+        x, y, z = ev["x"], ev["y"], ev["z"]
+        tx, ty, tz = ev["true_x"], ev["true_y"], ev["true_z"]
+        for p in np.unique(pid):
+            m = pid == p
+            if m.sum() < 3:
+                continue
+            xm, ym, zm = x[m], y[m], z[m]
+            xt, yt, zt = tx[m], ty[m], tz[m]
+            rm, rt = np.hypot(xm, ym), np.hypot(xt, yt)
+            om, ot = np.argsort(rm), np.argsort(rt)
+            zrm.append(zr_resid(rm[om], zm[om])); zrt.append(zr_resid(rt[ot], zt[ot]))
+            rmm.append(r_mono(rm)); rmt.append(r_mono(rt))
+            smear_t.append(np.hypot(xm - xt, ym - yt)); smear_z.append(np.abs(zm - zt))
+        if len(zrm) >= args.n_tracks:
+            break
     zrm, zrt = np.array(zrm), np.array(zrt)
     st, sz = np.concatenate(smear_t), np.concatenate(smear_z)
     print("=" * 60); print(f"TRACKER SMEARING CHECK (shard {args.shard}, {len(zrm)} tracks)"); print("=" * 60)
