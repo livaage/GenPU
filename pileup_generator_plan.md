@@ -205,6 +205,16 @@ which is fine-tuned last, not learned first.
   (all features matched) — comparable/better than pion-only 150k, and the vertex fix kicks in
   early so we stopped that run at ~70k (residual ~0.81-0.85 is a floor more steps don't move).
   THE tracker for downstream = multispecies_vertex_v1/checkpoint_070000.pt (use_vertex).
+- **TRACKER PER-TRACK DIAGNOSIS (why ~0.81): duplicate hits, not gross incoherence.** Per-track
+  two-sample test (helix-coherence features: r-monotonicity, z-vs-r & phi-vs-r linearity residuals)
+  + track plots. NORM-BUG CAUGHT: first run used the pion-slice norm on the multispecies model ->
+  mis-standardised conditioning -> artefactual r_mean 162 & AUC 0.96; with the correct multispecies
+  norm, r_mean matches (349/356) and per-track AUC is 0.87. Real finding: r_mean/z/phi/dr all match;
+  the ONE defect is r_mono 0.998->0.88 — ~12% of generated tracks repeat a layer (duplicate radii),
+  which real tracks never do (visible in plots as duplicate low-r points / occasional radial jump).
+  So most tracks ARE coherent helices; helix-residual build NOT warranted. Cheap fix: mask
+  already-used layers in generate() (prevent duplicates). LESSON: the pooled event gate understates
+  per-track structure; always eval tracker per-track, and match the checkpoint's training norm.
 - Acceptance (per species, not aggregated): hit-multiplicity distributions **including tails**
   (tail risk here is material effects — nuclear interactions, conversions, punch-through — not
   decays, which M0 handles); residuals of hit positions vs truth per layer; fraction of particles
