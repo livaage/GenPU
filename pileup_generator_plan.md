@@ -210,11 +210,16 @@ which is fine-tuned last, not learned first.
   + track plots. NORM-BUG CAUGHT: first run used the pion-slice norm on the multispecies model ->
   mis-standardised conditioning -> artefactual r_mean 162 & AUC 0.96; with the correct multispecies
   norm, r_mean matches (349/356) and per-track AUC is 0.87. Real finding: r_mean/z/phi/dr all match;
-  the ONE defect is r_mono 0.998->0.88 — ~12% of generated tracks repeat a layer (duplicate radii),
-  which real tracks never do (visible in plots as duplicate low-r points / occasional radial jump).
-  So most tracks ARE coherent helices; helix-residual build NOT warranted. Cheap fix: mask
-  already-used layers in generate() (prevent duplicates). LESSON: the pooled event gate understates
-  per-track structure; always eval tracker per-track, and match the checkpoint's training norm.
+  the largest per-feature gap was r_mono 0.998->0.88. CORRECTION (direct duplicate-layer count):
+  REAL tracks repeat a layer_class 43% of the time (mean 1.65/track; physical — overlapping
+  sensors / re-crossings) and GEN matches at 47%. So r_mono was NOT measuring layer duplication;
+  it measured tied physical RADII (real same-layer hits sit at DIFFERENT r -> no tie; gen ~12% of
+  steps emit an identical (layer,r-bin) hit -> tie). So the real defect is a narrow identical-hit
+  degeneracy + slightly loose z-vs-r linearity, NOT wrong occupancy. => "mask used layers" fix is
+  WRONG (would forbid legit 43% duplication). Tracker per-track is actually good; 0.87 residual is
+  subtle, not worth a big fix. LESSONS: (1) pooled event gate understates per-track structure;
+  (2) always load a checkpoint with its TRAINING norm (a norm mismatch faked r_mean 162/AUC 0.96);
+  (3) verify a "defect" against real data before fixing (real duplicates layers 43%!).
 - Acceptance (per species, not aggregated): hit-multiplicity distributions **including tails**
   (tail risk here is material effects — nuclear interactions, conversions, punch-through — not
   decays, which M0 handles); residuals of hit positions vs truth per layer; fraction of particles
