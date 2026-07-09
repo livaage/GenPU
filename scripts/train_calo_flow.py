@@ -68,16 +68,11 @@ def main():
         norm["pts_mean"] = np.concatenate([warp.mean(0), norm["pts_mean"][2:]]).astype(np.float32)
         norm["pts_std"] = np.concatenate([warp.std(0), norm["pts_std"][2:]]).astype(np.float32)
         pos_s = pos_s.tolist()
-        # warp the per-shower CORE global dims (2,3 = core_eta, core_phi) if present
-        gs = np.zeros(G, np.float32)
-        if G >= 4:
-            gs[2:4] = np.maximum(np.median(np.abs(glob[:, 2:4]), axis=0), 1e-4)
-            gw = np.arcsinh(glob[:, 2:4] / gs[2:4])
-            gm = norm["glob_mean"].copy(); gstd = norm["glob_std"].copy()
-            gm[2:4] = gw.mean(0); gstd[2:4] = gw.std(0)
-            norm["glob_mean"] = gm.astype(np.float32); norm["glob_std"] = gstd.astype(np.float32)
-        glob_s = gs.tolist()
-        print(f"warp arcsinh: pos_s={pos_s}  glob_s={glob_s}")
+        # NOTE: the CORE is modelled by a MIXTURE, which represents a sharp peak natively
+        # (a narrow component) — warping it is the wrong tool and the sinh inverse explodes
+        # on mixture tails. So we warp ONLY the flow's delta; the core stays plain-normalised
+        # and gets its sharpness from mixture components (GlobalHead n_mix).
+        print(f"warp arcsinh (delta only): pos_s={pos_s}")
     model = CaloFlow(norm, log_floor=log_floor, pos_arcsinh_s=pos_s, glob_arcsinh_s=glob_s).to(dev)
 
     # standardise & move to GPU. Points: positions (d_eta,d_phi) standardised for

@@ -162,7 +162,9 @@ class CaloFlow(nn.Module):
         self.cond = ParticleConditioning(embed_dim=embed_dim, use_pdg=use_pdg)
         # global = [total_logE, log_n] (+ [core_eta, core_phi] when the slice carries a
         # per-shower core for the compactness fix); infer width from the norm buffers.
-        self.glob = GlobalHead(embed_dim=embed_dim, n_glob=int(len(norm["glob_mean"])))
+        # n_mix=8: the per-shower core is sharply peaked (leptokurtic); more components let
+        # the mixture fit the narrow center on plain-normalised data (no coordinate warp).
+        self.glob = GlobalHead(embed_dim=embed_dim, n_glob=int(len(norm["glob_mean"])), n_mix=8)
         self.points = PointCFM(embed_dim=embed_dim, hidden=hidden_pt)
         self.energy = EnergyHead(embed_dim=embed_dim, n_mix=4)  # extra component for the sub-floor tail
         for k, v in norm.items():
