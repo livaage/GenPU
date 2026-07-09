@@ -201,6 +201,10 @@ which is fine-tuned last, not learned first.
   r_std 267->278, layer_std 11.5->11.7 — all Δ/σ<0.3). No helix build needed. Remaining 0.855 is
   a softer multivariate residual (like the calo's 0.813). Behind use_vertex flag; abspos machinery
   in _embed_hits. Tracker now comparable to calo at event level.
+  GENERALIZES to multi-species: multispecies_vertex_v1 (e/pi/p/mu) @60k gates 0.812 on pions
+  (all features matched) — comparable/better than pion-only 150k, and the vertex fix kicks in
+  early so we stopped that run at ~70k (residual ~0.81-0.85 is a floor more steps don't move).
+  THE tracker for downstream = multispecies_vertex_v1/checkpoint_070000.pt (use_vertex).
 - Acceptance (per species, not aggregated): hit-multiplicity distributions **including tails**
   (tail risk here is material effects — nuclear interactions, conversions, punch-through — not
   decays, which M0 handles); residuals of hit positions vs truth per layer; fraction of particles
