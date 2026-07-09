@@ -157,7 +157,7 @@ class CaloFlow(nn.Module):
     """Shared conditioning + global/position/energy heads, with (un)standardisation buffers."""
 
     def __init__(self, norm, embed_dim=64, hidden_pt=256, use_pdg=True, log_floor=None,
-                 pos_arcsinh_s=None, glob_arcsinh_s=None):
+                 qt_z=None, qt_pos_x=None, qt_glob_x=None, qt_glob_mask=None):
         super().__init__()
         self.cond = ParticleConditioning(embed_dim=embed_dim, use_pdg=use_pdg)
         # global = [total_logE, log_n] (+ [core_eta, core_phi] when the slice carries a
@@ -172,57 +172,77 @@ class CaloFlow(nn.Module):
         if log_floor is None:
             log_floor = float(torch.log(torch.tensor(5e-5)))
         self.register_buffer("log_floor", torch.tensor(float(log_floor)))
-        # position coordinate warp: the d_eta/d_phi flow target is a near-delta spike a
-        # continuous flow can't reproduce (Gaussian->ODE stays smooth). arcsinh(pos/s)
-        # spreads the spike into a broad region the flow fits easily; invert with sinh at
-        # generation -> the sharp peak is recovered exactly. s>0 (per-dim) enables it. The
-        # pts_mean/pts_std buffers are then WARP-space stats (set by the trainer, saved here).
-        if pos_arcsinh_s is None:
-            pos_arcsinh_s = [0.0, 0.0]
-        self.register_buffer("pos_arcsinh_s", torch.as_tensor(pos_arcsinh_s, dtype=torch.float32))
-        # same warp for the per-shower CORE dims of the global head (the sharp core peak
-        # under-fills the mixture): per-glob s (0 = no warp, e.g. total_logE / log_n).
-        if glob_arcsinh_s is None:
-            glob_arcsinh_s = [0.0] * int(len(norm["glob_mean"]))
-        self.register_buffer("glob_arcsinh_s", torch.as_tensor(glob_arcsinh_s, dtype=torch.float32))
+        # NORMAL-QUANTILE normalisation. A near-delta d_eta/d_phi peak (delta) and a sharply
+        # peaked per-shower core defeat both a continuous flow (can't emit a spike) and a
+        # Gaussian mixture (plateaus on leptokurtic data). The quantile transform maps each
+        # marginal to EXACTLY Gaussian via its empirical inverse-CDF (a monotone map), so the
+        # flow/mixture only ever fit a standard Gaussian. Unlike arcsinh the inverse is
+        # BOUNDED — it maps a Gaussian sample back onto the DATA's own quantile range, so a
+        # mixture tail can't explode (worst case it saturates at the real min/max). Reference
+        # quantiles ride in buffers (fit by the trainer); default = identity (z-score path).
+        G = int(len(norm["glob_mean"]))
+        K = len(qt_z) if qt_z is not None else 256
+        self.register_buffer("qt_z", torch.as_tensor(
+            qt_z if qt_z is not None else torch.linspace(-4.0, 4.0, K), dtype=torch.float32))
+        self.register_buffer("qt_pos_x", torch.as_tensor(
+            qt_pos_x if qt_pos_x is not None else torch.zeros(K, 2), dtype=torch.float32))
+        self.register_buffer("qt_pos_on", torch.tensor(1.0 if qt_pos_x is not None else 0.0))
+        self.register_buffer("qt_glob_x", torch.as_tensor(
+            qt_glob_x if qt_glob_x is not None else torch.zeros(K, G), dtype=torch.float32))
+        self.register_buffer("qt_glob_mask", torch.as_tensor(
+            qt_glob_mask if qt_glob_mask is not None else torch.zeros(G), dtype=torch.float32))
 
     # standardisation helpers
     def std_cont(self, cont):
         return (cont - self.cont_mean) / self.cont_std
 
-    def _glob_warp(self, glob):      # physical globals -> warp space (core dims only)
-        s = self.glob_arcsinh_s
-        s_safe = torch.where(s > 0, s, torch.ones_like(s))
-        return torch.where(s > 0, torch.asinh(glob / s_safe), glob)
+    def _qt_fwd(self, x, ref_x):     # (N,D) physical -> Gaussian, per-col monotone interp
+        out = torch.empty_like(x)
+        for d in range(x.shape[1]):
+            xp = ref_x[:, d].contiguous()
+            xc = x[:, d].clamp(xp[0], xp[-1]).contiguous()   # bound the tail (piles at +-max sigma)
+            idx = torch.searchsorted(xp, xc).clamp(1, xp.shape[0] - 1)
+            x0, x1 = xp[idx - 1], xp[idx]
+            z0, z1 = self.qt_z[idx - 1], self.qt_z[idx]
+            t = (xc - x0) / (x1 - x0).clamp(min=1e-9)
+            out[:, d] = z0 + t * (z1 - z0)
+        return out
 
-    def _glob_unwarp(self, g):       # warp space -> physical globals
-        # sinh is exponential, and the CORE mixture (unlike the bounded flow) can sample a
-        # Gaussian tail many sigma out -> sinh explodes it (core std -> 1e6). Clamp the
-        # warp value before sinh so physical core stays in the real range (arcsinh of the
-        # real |core| max ~2/s ~ 5; ±6 leaves headroom, kills the blow-up).
-        s = self.glob_arcsinh_s
-        g_c = torch.where(s > 0, g.clamp(-6.0, 6.0), g)
-        return torch.where(s > 0, s * torch.sinh(g_c), g)
+    def _qt_inv(self, z, ref_x):     # (N,D) Gaussian -> physical, BOUNDED to the data range
+        zp = self.qt_z.contiguous()
+        out = torch.empty_like(z)
+        for d in range(z.shape[1]):
+            zc = z[:, d].clamp(zp[0], zp[-1])
+            idx = torch.searchsorted(zp, zc).clamp(1, zp.shape[0] - 1)
+            z0, z1 = zp[idx - 1], zp[idx]
+            x0, x1 = ref_x[idx - 1, d], ref_x[idx, d]
+            t = (zc - z0) / (z1 - z0).clamp(min=1e-9)
+            out[:, d] = x0 + t * (x1 - x0)
+        return out
 
     def std_glob(self, glob):
-        return (self._glob_warp(glob) - self.glob_mean) / self.glob_std
-
-    def _pos_warp(self, pos):        # physical delta -> warp space
-        s = self.pos_arcsinh_s
-        return torch.asinh(pos / s) if bool((s > 0).all()) else pos
-
-    def _pos_unwarp(self, t):        # warp space -> physical delta
-        s = self.pos_arcsinh_s
-        return s * torch.sinh(t) if bool((s > 0).all()) else t
-
-    def std_pos(self, pos):
-        return (self._pos_warp(pos) - self.pts_mean[:2]) / self.pts_std[:2]
+        z = (glob - self.glob_mean) / self.glob_std
+        m = self.qt_glob_mask > 0
+        if bool(m.any()):
+            z = torch.where(m, self._qt_fwd(glob, self.qt_glob_x), z)   # quantile for masked dims
+        return z
 
     def unstd_glob(self, g):
-        return self._glob_unwarp(g * self.glob_std + self.glob_mean)
+        u = g * self.glob_std + self.glob_mean
+        m = self.qt_glob_mask > 0
+        if bool(m.any()):
+            u = torch.where(m, self._qt_inv(g, self.qt_glob_x), u)
+        return u
+
+    def std_pos(self, pos):
+        if bool(self.qt_pos_on > 0):
+            return self._qt_fwd(pos, self.qt_pos_x)
+        return (pos - self.pts_mean[:2]) / self.pts_std[:2]
 
     def unstd_pos(self, p):
-        return self._pos_unwarp(p * self.pts_std[:2] + self.pts_mean[:2])
+        if bool(self.qt_pos_on > 0):
+            return self._qt_inv(p, self.qt_pos_x)
+        return p * self.pts_std[:2] + self.pts_mean[:2]
 
     def cond_embed(self, cont_std, pdg):
         return self.cond(cont_std, pdg)

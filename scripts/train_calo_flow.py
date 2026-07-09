@@ -24,8 +24,9 @@ def main():
     ap.add_argument("--log_every", type=int, default=200)
     ap.add_argument("--save_every", type=int, default=10000)
     ap.add_argument("--run_name", default="calo_flow_photon_v1")
-    ap.add_argument("--pos_transform", choices=["none", "arcsinh"], default="none",
-                    help="warp d_eta/d_phi so the flow doesn't have to fit a near-delta spike")
+    ap.add_argument("--pos_transform", choices=["none", "arcsinh", "quantile"], default="none",
+                    help="reshape peaked marginals so the flow/mixture fit a Gaussian "
+                         "(quantile = bounded normal-quantile normalisation; recommended)")
     ap.add_argument("--no_wandb", action="store_true")
     args = ap.parse_args()
 
@@ -57,23 +58,23 @@ def main():
     # the flow fits a broad distribution; s per-dim = median(|delta|). pts_mean/std are
     # then recomputed over WARP space (the flow standardizes in warp space; unstd_pos
     # inverts with sinh). No slice rebuild needed.
-    pos_s = [0.0, 0.0]
     G = len(norm["glob_mean"])
-    glob_s = [0.0] * G
-    if args.pos_transform == "arcsinh":
-        norm = dict(norm)
-        # warp d_eta/d_phi deltas (flow target)
-        pos_s = np.maximum(np.median(np.abs(pts[:, :2]), axis=0), 1e-4).astype(np.float32)
-        warp = np.arcsinh(pts[:, :2] / pos_s)
-        norm["pts_mean"] = np.concatenate([warp.mean(0), norm["pts_mean"][2:]]).astype(np.float32)
-        norm["pts_std"] = np.concatenate([warp.std(0), norm["pts_std"][2:]]).astype(np.float32)
-        pos_s = pos_s.tolist()
-        # NOTE: the CORE is modelled by a MIXTURE, which represents a sharp peak natively
-        # (a narrow component) — warping it is the wrong tool and the sinh inverse explodes
-        # on mixture tails. So we warp ONLY the flow's delta; the core stays plain-normalised
-        # and gets its sharpness from mixture components (GlobalHead n_mix).
-        print(f"warp arcsinh (delta only): pos_s={pos_s}")
-    model = CaloFlow(norm, log_floor=log_floor, pos_arcsinh_s=pos_s, glob_arcsinh_s=glob_s).to(dev)
+    qt_kwargs = {}
+    if args.pos_transform == "quantile":
+        from scipy.special import ndtri  # inverse standard-normal CDF
+        K = 256
+        probs = np.linspace(0.5 / K, 1 - 0.5 / K, K)                 # avoid 0/1 -> +-inf
+        qt_z = ndtri(probs).astype(np.float32)                       # Gaussian quantile grid (monotone)
+        qt_pos_x = np.quantile(pts[:, :2], probs, axis=0).astype(np.float32)   # (K,2) monotone per col
+        # quantile-normalise the CORE dims (2,3); other globals keep z-score (ramp = unused).
+        qt_glob_x = np.tile(np.linspace(-1, 1, K, dtype=np.float32)[:, None], (1, G))
+        qt_glob_mask = np.zeros(G, np.float32)
+        for j in range(G):
+            if G >= 4 and j in (2, 3):
+                qt_glob_x[:, j] = np.quantile(glob[:, j], probs); qt_glob_mask[j] = 1.0
+        qt_kwargs = dict(qt_z=qt_z, qt_pos_x=qt_pos_x, qt_glob_x=qt_glob_x, qt_glob_mask=qt_glob_mask)
+        print(f"quantile normalise: pos dims [0,1], glob core dims {np.where(qt_glob_mask>0)[0].tolist()}  K={K}")
+    model = CaloFlow(norm, log_floor=log_floor, **qt_kwargs).to(dev)
 
     # standardise & move to GPU. Points: positions (d_eta,d_phi) standardised for
     # the flow; log-E kept in PHYSICAL units for the energy head + floor.
