@@ -333,6 +333,16 @@ which is fine-tuned last, not learned first.
   0.55->0.88 (WORSE - same-r barrel hits now get identical z), event gate 0.83->0.867 (worse).
   => z-coherence was NOT the dominant discriminator; fixing it buys ~0 on aggregate + side
   effects. Helix retired against a measured number. Tracker stays multispecies_vertex (0.81/0.87).
+- **CALO COUNT DITHER (single-cell spikes fixed) -> best calo = photon_qtd_v1.** shower_feats
+  under-filled spikes (width=0, lead_frac=1, logE_std=0, pos_energy_corr=0) all traced to ONE
+  thing: single-cell (n=1) showers, under-produced because log_n is a discrete count with a ~23%
+  atom at n=1 that the continuous mixture smooths (NOT binning - calo has no bins; same pathology
+  as the core spike, on the count). Fix = dequantize: log_n <- log(n+U(-0.5,0.5)) so the mixture
+  fits it, round(exp) recovers the integer at gen. RESULT: n=1, lead_frac=1, logE_std=0,
+  pos_energy_corr=0 spikes all now MATCH real (came up together as predicted); width=0 slightly
+  under (~7%). Gate 0.55, per-shower 0.60. Best calo = photon_qtd_v1 (quantile norm + count dither).
+  LESSON (general): discrete/atomic features (counts) in a continuous model need DEQUANTIZATION,
+  same family as the quantile reshape for peaked marginals.
 - Acceptance: CaloChallenge-style metrics — total energy response and resolution vs true E,
   layer-wise energy fractions, shower width/depth profiles, cell energy spectrum (check the
   low-energy tail vs threshold), point-count distributions. Per species.
