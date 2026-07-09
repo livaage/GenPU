@@ -51,6 +51,7 @@ def main():
     ap.add_argument("--n_tracks", type=int, default=15000)
     ap.add_argument("--use_vertex", action="store_true")
     ap.add_argument("--use_helix", action="store_true")
+    ap.add_argument("--cont_temp", type=float, default=1.0, help="sampling temperature for r/phi/z/time")
     ap.add_argument("--max_hits", type=int, default=32)
     args = ap.parse_args()
     dev = "cuda" if torch.cuda.is_available() else "cpu"; rng = np.random.default_rng(0)
@@ -79,7 +80,7 @@ def main():
             nh = torch.as_tensor(n_true[s:e], device=dev)
             vtx = vtxT[s:e] if args.use_vertex else None
             hlx = hlxT[s:e] if args.use_helix else None
-            gh, gl = model.tracker.generate(ce, nh, vertex_pos=vtx, helix_params=hlx)
+            gh, gl = model.tracker.generate(ce, nh, vertex_pos=vtx, helix_params=hlx, cont_temp=args.cont_temp)
         gh = gh.cpu().numpy()
         for j in range(e - s):
             gi = s + j; k = int(n_true[gi])
