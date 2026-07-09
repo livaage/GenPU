@@ -194,8 +194,13 @@ class CaloFlow(nn.Module):
         return torch.where(s > 0, torch.asinh(glob / s_safe), glob)
 
     def _glob_unwarp(self, g):       # warp space -> physical globals
+        # sinh is exponential, and the CORE mixture (unlike the bounded flow) can sample a
+        # Gaussian tail many sigma out -> sinh explodes it (core std -> 1e6). Clamp the
+        # warp value before sinh so physical core stays in the real range (arcsinh of the
+        # real |core| max ~2/s ~ 5; ±6 leaves headroom, kills the blow-up).
         s = self.glob_arcsinh_s
-        return torch.where(s > 0, s * torch.sinh(g), g)
+        g_c = torch.where(s > 0, g.clamp(-6.0, 6.0), g)
+        return torch.where(s > 0, s * torch.sinh(g_c), g)
 
     def std_glob(self, glob):
         return (self._glob_warp(glob) - self.glob_mean) / self.glob_std
