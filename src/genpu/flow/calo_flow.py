@@ -129,14 +129,17 @@ class EnergyHead(nn.Module):
         return o[:, 0], m[..., 0], m[..., 1], m[..., 2].clamp(-4, 3)  # floor_logit, w_logit, mu, log_sigma
 
     def loss(self, cond_embed, logE, log_floor):
-        is_floor = (logE <= log_floor + self.floor_eps).float()
+        # at-floor = NARROW band around the exact zero-suppression pile (single-contributor
+        # cells at 5e-5). Everything else — including the physical SUB-floor tail (shared-cell
+        # contributions below 5e-5) — is modelled by the mixture, so we don't clamp it away.
+        is_floor = (torch.abs(logE - log_floor) < self.floor_eps).float()
         floor_logit, w_logit, mu, ls = self._out(cond_embed)
         bce = F.binary_cross_entropy_with_logits(floor_logit, is_floor)
         logw = F.log_softmax(w_logit, dim=-1)                            # (N,K)
         comp = -0.5 * ((logE.unsqueeze(-1) - mu) / ls.exp()) ** 2 - ls    # (N,K), up to const
         logp = torch.logsumexp(logw + comp, dim=-1)                       # (N,)
-        above = 1.0 - is_floor
-        gnll = (-logp * above).sum() / above.sum().clamp(min=1.0)
+        cont = 1.0 - is_floor                                            # continuum (above AND below pile)
+        gnll = (-logp * cont).sum() / cont.sum().clamp(min=1.0)
         return bce + gnll
 
     @torch.no_grad()
@@ -147,7 +150,7 @@ class EnergyHead(nn.Module):
         mu_k = mu.gather(1, k[:, None])[:, 0]; ls_k = ls.gather(1, k[:, None])[:, 0]
         logE = mu_k + torch.randn_like(mu_k) * ls_k.exp()
         logE = torch.where(at_floor, torch.full_like(logE, log_floor), logE)
-        return logE.clamp(min=log_floor)
+        return logE.clamp(min=log_floor - 12.0)                          # allow physical sub-floor tail
 
 
 class CaloFlow(nn.Module):
@@ -160,7 +163,7 @@ class CaloFlow(nn.Module):
         # per-shower core for the compactness fix); infer width from the norm buffers.
         self.glob = GlobalHead(embed_dim=embed_dim, n_glob=int(len(norm["glob_mean"])))
         self.points = PointCFM(embed_dim=embed_dim, hidden=hidden_pt)
-        self.energy = EnergyHead(embed_dim=embed_dim)
+        self.energy = EnergyHead(embed_dim=embed_dim, n_mix=4)  # extra component for the sub-floor tail
         for k, v in norm.items():
             self.register_buffer(k, torch.as_tensor(v, dtype=torch.float32))
         if log_floor is None:
