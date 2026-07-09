@@ -189,6 +189,18 @@ which is fine-tuned last, not learned first.
   narrows r_std and layer_std. It is a directional DRIFT/BIAS (exposure bias), not an entropy
   deficit -> temperature cannot fix it. Real fix: scheduled sampling or the helix-residual
   physics anchor (pins layer/position to the analytic trajectory). A proper sub-project.
+- **TRACKER FIX SOLVED (abspos + vertex-anchored seed): gate 0.997 -> 0.855.** Diagnosis chain:
+  (1) per-layer-standardized residuals hide the trajectory (the AR autoregresses over near-
+  independent targets); (2) the first/innermost hit was generated from an UNTRAINED BOS token
+  (training never predicts hit_0; the BOS embedding row gets no gradient). Experiments:
+  feeding absolute (r,phi,z) INPUT alone REGRESSED to 0.9997 (frac_inner 0.008) — position
+  feedback amplified the bad first hit, PROVING first-hit is the root cause. Adding a
+  vertex-anchored seed (prepend the production vertex as a trained position-0 token with its
+  absolute (vr,vz), so hit_0 is predicted from a physical anchor and train==generate) FIXED it:
+  AUC 0.855, every discriminating feature matched (frac_inner 0.39->0.42, layer_mean 18.6->18.2,
+  r_std 267->278, layer_std 11.5->11.7 — all Δ/σ<0.3). No helix build needed. Remaining 0.855 is
+  a softer multivariate residual (like the calo's 0.813). Behind use_vertex flag; abspos machinery
+  in _embed_hits. Tracker now comparable to calo at event level.
 - Acceptance (per species, not aggregated): hit-multiplicity distributions **including tails**
   (tail risk here is material effects — nuclear interactions, conversions, punch-through — not
   decays, which M0 handles); residuals of hit positions vs truth per layer; fraction of particles
