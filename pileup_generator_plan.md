@@ -236,6 +236,15 @@ which is fine-tuned last, not learned first.
   not undertraining. To improve further needs an architectural change (helix-guide conditioning),
   NOT more steps. 70k checkpoint was already at the plateau (good early-stop). Tracker status:
   pooled event gate 0.81, per-track 0.87, converged. Both heads now at their architectural limit.
+- **TRACKER 512-BIN (finer spatial resolution) = new best, BIG win.** Binning-quantization test
+  proved r_mono/phi peaks are a 128-bin resolution artifact (quantized-real r_mono 0.86=gen, not
+  the AR); sweep showed 512 lifts the ceiling to ~0.93. Retrained multispecies_vertex at 512 bins
+  (70k, converged): r_mono 0.876->0.949 (real 0.998), full-identical 0.55->0.31 (real 0.21),
+  per-track AUC 0.87->0.80, EVENT GATE 0.83->0.756. Unlike helix-z, finer bins improved the
+  AGGREGATE (the binning ties were a real discriminator). z_r_resid/dr_std unchanged (AR, left).
+  Best tracker = multispecies_vertex_512bin/checkpoint_070000. Optional: 1024 bins -> r_mono ~0.96
+  (diminishing; big win was 128->512). LESSON: coarse discretization can itself be the defect;
+  test it by quantizing real data through the model's bins before blaming the model.
 - Acceptance (per species, not aggregated): hit-multiplicity distributions **including tails**
   (tail risk here is material effects — nuclear interactions, conversions, punch-through — not
   decays, which M0 handles); residuals of hit positions vs truth per layer; fraction of particles
