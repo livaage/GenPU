@@ -24,6 +24,7 @@ def main():
     ap.add_argument("--run_name", default="tracker_pion_v1")
     ap.add_argument("--max_particles", type=int, default=0, help="subsample to first N particles (0=all; for CPU smoke tests)")
     ap.add_argument("--use_vertex", action="store_true", help="seed AR with production vertex (vr,vz)")
+    ap.add_argument("--use_helix", action="store_true", help="reparametrize z as deviation from analytic trajectory")
     ap.add_argument("--no_wandb", action="store_true")
     args = ap.parse_args()
 
@@ -49,12 +50,26 @@ def main():
     tr_idx = np.where(~val_p)[0]
     va_idx = np.where(val_p)[0]
 
-    model = TrackerModel(norm, max_hits=M, use_vertex=args.use_vertex).to(dev)
-
     # standardise cont on CPU; hits/offsets stay on CPU for per-batch padding.
     contS = ((cont - norm["cont_mean"]) / norm["cont_std"]).astype(np.float32)
     lc_all = hits[:, 0].astype(np.int64)          # layer_class per hit
     resid_all = hits[:, 1:5].astype(np.float32)   # (r,phi,z,time) residuals
+
+    # helix reparametrization: precompute z_dev_std = std(z_phys - z_guide) over hits.
+    z_dev_std = 1.0
+    if args.use_helix:
+        from genpu.detector_geometry import LAYER_MEANS as LM, LAYER_STDS as LS
+        lc = lc_all.clip(0, LM.shape[0] - 1)
+        r_phys = resid_all[:, 0] * LS[lc, 0] + LM[lc, 0]
+        z_phys = resid_all[:, 2] * LS[lc, 2] + LM[lc, 2]
+        pidx = np.repeat(np.arange(S), np.diff(off))          # particle index per hit
+        vr, vz, sh = cont[pidx, 5], cont[pidx, 6], np.sinh(cont[pidx, 1])
+        z_dev = z_phys - (vz + (r_phys - vr) * sh)
+        z_dev_std = float(z_dev.std())
+        print(f"helix: z_dev_std={z_dev_std:.2f} (real z_r_resid scale)")
+
+    model = TrackerModel(norm, max_hits=M, use_vertex=args.use_vertex,
+                         use_helix=args.use_helix, z_dev_std=z_dev_std).to(dev)
 
     def make_batch(idx):
         """Pad a set of particles into (B,M) sequences (first M hits, inner->outer)."""
@@ -72,15 +87,17 @@ def main():
         pg = torch.as_tensor(pdg[idx], dtype=torch.long, device=dev)
         # physical vertex (vr, vz) = CONT_FEATURES indices 5,6 (unstandardised)
         vtx = torch.as_tensor(cont[idx][:, [5, 6]], dtype=torch.float32, device=dev)
+        contP = torch.as_tensor(cont[idx], dtype=torch.float32, device=dev)   # physical cont
         return (torch.as_tensor(layer, device=dev),
                 torch.as_tensor(cont4, device=dev),
                 torch.as_tensor(mask, device=dev),
-                torch.as_tensor(n_hits, device=dev), cS, pg, vtx)
+                torch.as_tensor(n_hits, device=dev), cS, pg, vtx, contP)
 
     def step_loss(idx):
-        layer, cont4, mask, nh, cS, pg, vtx = make_batch(idx)
+        layer, cont4, mask, nh, cS, pg, vtx, contP = make_batch(idx)
         ce = model.cond_embed(cS, pg)
-        return model.tracker.loss(layer, cont4, ce, mask, nh, vertex_pos=vtx)
+        hlx = TrackerModel.helix_params_from_cont(contP) if args.use_helix else None
+        return model.tracker.loss(layer, cont4, ce, mask, nh, vertex_pos=vtx, helix_params=hlx)
 
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
     Path(args.out).mkdir(parents=True, exist_ok=True)

@@ -60,6 +60,8 @@ class TrackerARModel(nn.Module):
         max_hits: int = 32,
         dropout: float = 0.0,
         use_vertex: bool = False,
+        use_helix: bool = False,
+        z_dev_std: float = 1.0,
     ):
         super().__init__()
         self.model_dim = model_dim
@@ -69,6 +71,12 @@ class TrackerARModel(nn.Module):
         # is predicted from a physical anchor instead of an untrained BOS -> fixes the
         # inner-layer deficit. Off by default for backward compat with older checkpoints.
         self.use_vertex = use_vertex
+        # use_helix: reparametrize the z coordinate as the deviation from the analytic
+        # trajectory z_guide = vz + (r - vr)*sinh(eta). The z head then predicts only the
+        # small multiple-scattering deviation, so z = z_guide(r) + dev is LINEAR in r by
+        # construction -> the per-track z-vs-r coherence (z_r_resid) is enforced, not left
+        # to the AR to discover. helix_params = (B,3) physical [vr, vz, sinh(eta)].
+        self.use_helix = use_helix
 
         # Token embeddings for each feature
         # Layer: 48 classes + 1 BOS token
@@ -123,22 +131,42 @@ class TrackerARModel(nn.Module):
         self.register_buffer("_layer_stds", torch.tensor(LAYER_STDS, dtype=torch.float32))
         self.register_buffer("_spatial_centers", _make_bin_centers(N_BINS_SPATIAL, *SPATIAL_RANGE))
         self.register_buffer("_time_centers", _make_bin_centers(N_BINS_TIME, *TIME_RANGE))
+        # scale for the standardized z helix-deviation (set from data at train time)
+        self.register_buffer("z_dev_std", torch.tensor(float(z_dev_std)))
+
+    def _z_guide(self, r_phys: torch.Tensor, helix_params: torch.Tensor) -> torch.Tensor:
+        """Analytic z along the trajectory at radius r_phys: z = vz + (r - vr)*sinh(eta).
+        helix_params: (B,3) physical [vr, vz, sinh(eta)]; r_phys: (B,N). -> (B,N)."""
+        vr, vz, sh = helix_params[:, 0:1], helix_params[:, 1:2], helix_params[:, 2:3]
+        return vz + (r_phys - vr) * sh
 
     def _causal_mask(self, seq_len: int, device: torch.device) -> torch.Tensor:
         return torch.triu(torch.ones(seq_len, seq_len, device=device, dtype=torch.bool), diagonal=1)
 
-    def _tokenize_continuous(self, continuous: torch.Tensor) -> tuple[torch.Tensor, ...]:
+    def _tokenize_continuous(self, continuous: torch.Tensor,
+                             layer_classes: torch.Tensor | None = None,
+                             helix_params: torch.Tensor | None = None) -> tuple[torch.Tensor, ...]:
         """Convert per-layer-standardized (r, phi, z, time) to bin indices.
 
         Args:
             continuous: (B, N, 4) float — per-layer-standardized residuals
+            layer_classes, helix_params: required when use_helix — used to reparametrize
+                the z column into the standardized helix-deviation before binning.
 
         Returns:
             r_bins, phi_bins, z_bins, time_bins: each (B, N) long
         """
         r_bins = _digitize(continuous[:, :, 0], N_BINS_SPATIAL, *SPATIAL_RANGE)
         phi_bins = _digitize(continuous[:, :, 1], N_BINS_SPATIAL, *SPATIAL_RANGE)
-        z_bins = _digitize(continuous[:, :, 2], N_BINS_SPATIAL, *SPATIAL_RANGE)
+        z_col = continuous[:, :, 2]
+        if self.use_helix:
+            # per-layer-std z,r -> physical -> deviation from the analytic trajectory
+            lc = layer_classes.clamp(0, N_LAYERS - 1)
+            lm = self._layer_means[lc]; ls = self._layer_stds[lc]
+            z_phys = z_col * ls[..., 2] + lm[..., 2]
+            r_phys = continuous[:, :, 0] * ls[..., 0] + lm[..., 0]
+            z_col = (z_phys - self._z_guide(r_phys, helix_params)) / self.z_dev_std
+        z_bins = _digitize(z_col, N_BINS_SPATIAL, *SPATIAL_RANGE)
         time_bins = _digitize(continuous[:, :, 3], N_BINS_TIME, *TIME_RANGE)
         return r_bins, phi_bins, z_bins, time_bins
 
@@ -149,6 +177,7 @@ class TrackerARModel(nn.Module):
         phi_bins: torch.Tensor,
         z_bins: torch.Tensor,
         time_bins: torch.Tensor,
+        helix_params: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Embed tokenized hit sequence + each hit's absolute spatial position."""
         tok = torch.cat([
@@ -164,7 +193,11 @@ class TrackerARModel(nn.Module):
         lm = self._layer_means[lc]; ls = self._layer_stds[lc]           # (B, N, 4): r,phi,z,time
         r_phys = self._spatial_centers[r_bins] * ls[..., 0] + lm[..., 0]
         phi_phys = self._spatial_centers[phi_bins] * ls[..., 1] + lm[..., 1]
-        z_phys = self._spatial_centers[z_bins] * ls[..., 2] + lm[..., 2]
+        if self.use_helix:
+            # z bins are the standardized helix-deviation: z = z_guide(r) + dev
+            z_phys = self._z_guide(r_phys, helix_params) + self._spatial_centers[z_bins] * self.z_dev_std
+        else:
+            z_phys = self._spatial_centers[z_bins] * ls[..., 2] + lm[..., 2]
         abspos = torch.stack([r_phys / 1000.0, torch.sin(phi_phys),
                               torch.cos(phi_phys), z_phys / 3000.0], dim=-1)
         return tok + self.abspos_proj(abspos)
@@ -185,6 +218,7 @@ class TrackerARModel(nn.Module):
         cond: torch.Tensor,
         mask: torch.Tensor,
         vertex_pos: torch.Tensor | None = None,
+        helix_params: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
         """Teacher-forced forward pass.
 
@@ -194,14 +228,15 @@ class TrackerARModel(nn.Module):
             cond: (B, cond_dim) particle embedding
             mask: (B, N) bool
             vertex_pos: (B, 2) physical [vr, vz] — required when use_vertex.
+            helix_params: (B, 3) physical [vr, vz, sinh(eta)] — required when use_helix.
         With use_vertex the sequence is [vertex, hit_0..hit_{N-1}] (len N+1) and output
         position i predicts hit_i; without it, the legacy [hit_0..] with a +1 shift.
         """
         B, N = layer_classes.shape
         device = layer_classes.device
 
-        r_bins, phi_bins, z_bins, time_bins = self._tokenize_continuous(continuous)
-        h = self._embed_hits(layer_classes, r_bins, phi_bins, z_bins, time_bins)
+        r_bins, phi_bins, z_bins, time_bins = self._tokenize_continuous(continuous, layer_classes, helix_params)
+        h = self._embed_hits(layer_classes, r_bins, phi_bins, z_bins, time_bins, helix_params)
 
         if self.use_vertex:
             v = self._vertex_embed(vertex_pos).unsqueeze(1)          # (B,1,D)
@@ -235,6 +270,7 @@ class TrackerARModel(nn.Module):
         mask: torch.Tensor,
         n_hits: torch.Tensor,
         vertex_pos: torch.Tensor | None = None,
+        helix_params: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
         """Compute AR loss: CE for all token types.
 
@@ -244,8 +280,8 @@ class TrackerARModel(nn.Module):
         B, N = layer_classes.shape
         device = layer_classes.device
 
-        out = self.forward(layer_classes, continuous, cond, mask, vertex_pos)
-        r_bins, phi_bins, z_bins, time_bins = self._tokenize_continuous(continuous)
+        out = self.forward(layer_classes, continuous, cond, mask, vertex_pos, helix_params)
+        r_bins, phi_bins, z_bins, time_bins = self._tokenize_continuous(continuous, layer_classes, helix_params)
 
         if self.use_vertex:
             # sequence [vertex, hit_0..]; out[:, :N] predicts hits 0..N-1 (no shift).
@@ -313,6 +349,7 @@ class TrackerARModel(nn.Module):
         cond: torch.Tensor,
         n_hits: torch.Tensor,
         vertex_pos: torch.Tensor | None = None,
+        helix_params: torch.Tensor | None = None,
         layer_temp: float = 1.0,
         cont_temp: float = 1.0,
     ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -355,11 +392,11 @@ class TrackerARModel(nn.Module):
                 else:
                     h = torch.cat([vtok, self._embed_hits(
                         gen_layers[:, :step], gen_r[:, :step], gen_phi[:, :step],
-                        gen_z[:, :step], gen_time[:, :step])], dim=1)
+                        gen_z[:, :step], gen_time[:, :step], helix_params)], dim=1)
             else:
                 h = self._embed_hits(
                     gen_layers[:, :step + 1], gen_r[:, :step + 1], gen_phi[:, :step + 1],
-                    gen_z[:, :step + 1], gen_time[:, :step + 1])
+                    gen_z[:, :step + 1], gen_time[:, :step + 1], helix_params)
             seq_len = h.shape[1]
             pos = self.pos_embedding(torch.arange(seq_len, device=device)).unsqueeze(0)
             h = h + pos
@@ -397,6 +434,10 @@ class TrackerARModel(nn.Module):
         layer_means = self._layer_means[layer_idx]
         layer_stds = self._layer_stds[layer_idx]
         hits_physical = residuals * layer_stds + layer_means
+        if self.use_helix:
+            # z bins are the standardized helix-deviation: z = z_guide(r_gen) + dev
+            r_phys = hits_physical[..., 0]
+            hits_physical[..., 2] = self._z_guide(r_phys, helix_params) + z_resid * self.z_dev_std
         hits_physical = hits_physical * hit_mask.unsqueeze(-1).float()
 
         return hits_physical, gen_layers

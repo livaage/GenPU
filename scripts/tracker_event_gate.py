@@ -62,6 +62,7 @@ def main():
     ap.add_argument("--cont_temp", type=float, default=1.0)
     ap.add_argument("--batch", type=int, default=4096)
     ap.add_argument("--use_vertex", action="store_true", help="model trained with vertex seed")
+    ap.add_argument("--use_helix", action="store_true", help="model trained with helix-z reparametrization")
     ap.add_argument("--max_particles", type=int, default=0, help="0=all; smoke subsample")
     args = ap.parse_args()
     dev = "cuda" if torch.cuda.is_available() else "cpu"
@@ -69,7 +70,7 @@ def main():
 
     dsl = np.load(args.slice)
     norm = {"cont_mean": dsl["cont_mean"], "cont_std": dsl["cont_std"]}
-    model = TrackerModel(norm, use_vertex=args.use_vertex).to(dev)
+    model = TrackerModel(norm, use_vertex=args.use_vertex, use_helix=args.use_helix).to(dev)
     model.load_state_dict(torch.load(args.ckpt, map_location=dev)["model"]); model.eval()
 
     d = np.load(Path(args.preproc_dir) / f"shard_{args.shard:04d}_stage2.npz")
@@ -91,6 +92,7 @@ def main():
     contS = torch.as_tensor((cont - norm["cont_mean"]) / norm["cont_std"], device=dev)
     pdgT = torch.as_tensor(pdg, device=dev)
     vtxT = torch.as_tensor(cont[:, [5, 6]], dtype=torch.float32, device=dev)  # physical vr,vz
+    hlxT = TrackerModel.helix_params_from_cont(torch.as_tensor(cont, dtype=torch.float32, device=dev))
     gen_layer, gen_r, gen_z, gen_src = [], [], [], []
     for s in range(0, len(sel), args.batch):
         e = min(s + args.batch, len(sel))
@@ -98,7 +100,9 @@ def main():
             ce = model.cond_embed(contS[s:e], pdgT[s:e])
             nh = torch.as_tensor(n_true[s:e], device=dev)
             vtx = vtxT[s:e] if args.use_vertex else None
-            hits, layers = model.tracker.generate(ce, nh, vertex_pos=vtx, layer_temp=args.layer_temp,
+            hlx = hlxT[s:e] if args.use_helix else None
+            hits, layers = model.tracker.generate(ce, nh, vertex_pos=vtx, helix_params=hlx,
+                                                  layer_temp=args.layer_temp,
                                                   cont_temp=args.cont_temp)  # (b,Nmax,4), (b,Nmax)
         hits = hits.cpu().numpy(); layers = layers.cpu().numpy()
         for j in range(e - s):

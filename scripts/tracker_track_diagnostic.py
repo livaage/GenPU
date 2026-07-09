@@ -50,6 +50,7 @@ def main():
     ap.add_argument("--slice", default="/scratch/gpfs/IOJALVO/lv7805/genpu_data/tracker_slice/pion.npz")
     ap.add_argument("--n_tracks", type=int, default=15000)
     ap.add_argument("--use_vertex", action="store_true")
+    ap.add_argument("--use_helix", action="store_true")
     ap.add_argument("--max_hits", type=int, default=32)
     args = ap.parse_args()
     dev = "cuda" if torch.cuda.is_available() else "cpu"; rng = np.random.default_rng(0)
@@ -60,7 +61,7 @@ def main():
     S = cont.shape[0]
     val = rng.permutation(S)[:args.n_tracks]
 
-    model = TrackerModel(norm, use_vertex=args.use_vertex).to(dev)
+    model = TrackerModel(norm, use_vertex=args.use_vertex, use_helix=args.use_helix).to(dev)
     model.load_state_dict(torch.load(args.ckpt, map_location=dev)["model"]); model.eval()
     LM = LAYER_MEANS; LS = LAYER_STDS
 
@@ -70,13 +71,15 @@ def main():
     contS = torch.as_tensor((cont[val] - norm["cont_mean"]) / norm["cont_std"], dtype=torch.float32, device=dev)
     pdgT = torch.as_tensor(pdg[val], dtype=torch.long, device=dev)
     vtxT = torch.as_tensor(cont[val][:, [5, 6]], dtype=torch.float32, device=dev)
+    hlxT = TrackerModel.helix_params_from_cont(torch.as_tensor(cont[val], dtype=torch.float32, device=dev))
     for s in range(0, len(val), 4096):
         e = min(s + 4096, len(val))
         with torch.no_grad():
             ce = model.cond_embed(contS[s:e], pdgT[s:e])
             nh = torch.as_tensor(n_true[s:e], device=dev)
             vtx = vtxT[s:e] if args.use_vertex else None
-            gh, gl = model.tracker.generate(ce, nh, vertex_pos=vtx)
+            hlx = hlxT[s:e] if args.use_helix else None
+            gh, gl = model.tracker.generate(ce, nh, vertex_pos=vtx, helix_params=hlx)
         gh = gh.cpu().numpy()
         for j in range(e - s):
             gi = s + j; k = int(n_true[gi])
