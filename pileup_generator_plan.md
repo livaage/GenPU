@@ -220,6 +220,15 @@ which is fine-tuned last, not learned first.
   subtle, not worth a big fix. LESSONS: (1) pooled event gate understates per-track structure;
   (2) always load a checkpoint with its TRAINING norm (a norm mismatch faked r_mean 162/AUC 0.96);
   (3) verify a "defect" against real data before fixing (real duplicates layers 43%!).
+- **r_mono INVESTIGATION (don't forbid same-r):** measured full-identical vs same-r-diff-posn
+  hit-pairs by barrel/endcap. REAL tracks HAVE full-identical hits (0.21/track, mostly barrel —
+  merged digitization); physical same-r-diff-posn matched (1.41 real / 1.67 gen). Gen over-produces
+  full-identical barrel hits (0.55 vs 0.21, ~2.6x = mild bin mode-collapse). => forbidding identical
+  hits would delete a real feature; the defect is modest over-production, diminishing returns, LEAVE
+  it. Calo energy FLOOR clamp similarly removed a physical feature (per-particle sub-floor
+  contributions, ~0.7% of cells) -> soften the floor to recover the cell log_E sub-floor tail.
+  Tracker coherence peaks (z/phi-vs-r): lighter-than-helix option = feed analytic helix next-hit
+  position as a CONDITIONING guide (keep tokenized output), not full residual reparametrization.
 - Acceptance (per species, not aggregated): hit-multiplicity distributions **including tails**
   (tail risk here is material effects — nuclear interactions, conversions, punch-through — not
   decays, which M0 handles); residuals of hit positions vs truth per layer; fraction of particles
