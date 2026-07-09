@@ -32,24 +32,35 @@ def mlp(sizes, act=nn.SiLU):
 
 
 class GlobalHead(nn.Module):
-    """cond_embed -> Gaussian(mu, logvar) over 2 standardised globals."""
+    """cond_embed -> diagonal Gaussian MIXTURE over the standardised globals
+    [total_logE, log_n, core_eta, core_phi]. A single Gaussian smears the shower
+    core, whose real distribution is sharply peaked at the particle direction with
+    heavy tails (kurtosis ~8-20); a K-component mixture captures peak + tails."""
 
-    def __init__(self, embed_dim=64, hidden=128, n_glob=2):
+    def __init__(self, embed_dim=64, hidden=128, n_glob=2, n_mix=4):
         super().__init__()
-        self.net = mlp([embed_dim, hidden, hidden, 2 * n_glob])
+        self.n_glob = n_glob; self.n_mix = n_mix
+        self.net = mlp([embed_dim, hidden, hidden, n_mix * (1 + 2 * n_glob)])
 
-    def forward(self, cond_embed):
-        mu, logvar = self.net(cond_embed).chunk(2, dim=-1)
-        return mu, logvar.clamp(-8, 6)
+    def _out(self, cond_embed):
+        o = self.net(cond_embed); K, G = self.n_mix, self.n_glob
+        w = o[:, :K]
+        r = o[:, K:].view(-1, K, 2 * G)
+        return w, r[:, :, :G], r[:, :, G:].clamp(-8, 6)   # w_logit (N,K), mu (N,K,G), log_sigma (N,K,G)
 
     def nll(self, cond_embed, glob_std):
-        mu, logvar = self(cond_embed)
-        return 0.5 * (logvar + (glob_std - mu) ** 2 / logvar.exp()).sum(-1).mean()
+        w, mu, ls = self._out(cond_embed)
+        logw = F.log_softmax(w, dim=-1)                                   # (N,K)
+        comp = (-0.5 * ((glob_std.unsqueeze(1) - mu) / ls.exp()) ** 2 - ls).sum(-1)  # (N,K)
+        return -(torch.logsumexp(logw + comp, dim=-1)).mean()
 
     @torch.no_grad()
     def sample(self, cond_embed):
-        mu, logvar = self(cond_embed)
-        return mu + torch.randn_like(mu) * (0.5 * logvar).exp()
+        w, mu, ls = self._out(cond_embed)
+        k = torch.distributions.Categorical(logits=w).sample()           # (N,)
+        idx = k[:, None, None].expand(-1, 1, self.n_glob)
+        mu_k = mu.gather(1, idx)[:, 0]; ls_k = ls.gather(1, idx)[:, 0]
+        return mu_k + torch.randn_like(mu_k) * ls_k.exp()
 
 
 def timestep_embed(t, dim=64):
