@@ -15,15 +15,15 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from genpu.detector_geometry import LAYER_MEANS, LAYER_STDS, N_LAYERS
 
-N_BINS, LO, HI = 128, -3.0, 3.0
-CENTERS = (np.linspace(LO, HI, N_BINS + 1)[:-1] + np.linspace(LO, HI, N_BINS + 1)[1:]) / 2
+LO, HI = -3.0, 3.0
 
 
-def quantize(resid):
+def quantize(resid, n_bins):
     """residual -> model bin center (matches tracker_ar._digitize + _spatial_centers)."""
+    centers = (np.linspace(LO, HI, n_bins + 1)[:-1] + np.linspace(LO, HI, n_bins + 1)[1:]) / 2
     clamped = np.clip(resid, LO, HI)
-    idx = np.round((clamped - LO) / (HI - LO) * (N_BINS - 1)).astype(int).clip(0, N_BINS - 1)
-    return CENTERS[idx]
+    idx = np.round((clamped - LO) / (HI - LO) * (n_bins - 1)).astype(int).clip(0, n_bins - 1)
+    return centers[idx]
 
 
 def track_feats(r, phi, z):
@@ -52,31 +52,35 @@ def main():
     LM, LS = LAYER_MEANS, LAYER_STDS
 
     names = ["n_hits", "r_mean", "r_mono", "z_r_resid", "phi_r_resid", "dr_std"]
-    Xr, Xq = [], []
+    sweep = [128, 256, 512, 1024, 2048]
+    # precompute per-track layer/residual once
+    tracks = []
     for gi in val:
         a, b = off[gi], min(off[gi] + args.max_hits, off[gi + 1])
         lc = hits[a:b, 0].astype(int).clip(0, N_LAYERS - 1)
-        res = hits[a:b, 1:4]                                   # per-layer residuals (r,phi,z)
-        # REAL physical
-        rr = res[:, 0] * LS[lc, 0] + LM[lc, 0]
-        pp = res[:, 1] * LS[lc, 1] + LM[lc, 1]
-        zz = res[:, 2] * LS[lc, 2] + LM[lc, 2]
-        f = track_feats(rr, pp, zz)
-        if f: Xr.append(f)
-        # QUANTIZED-real physical (residuals through the model bins)
-        qr = quantize(res[:, 0]) * LS[lc, 0] + LM[lc, 0]
-        qp = quantize(res[:, 1]) * LS[lc, 1] + LM[lc, 1]
-        qz = quantize(res[:, 2]) * LS[lc, 2] + LM[lc, 2]
-        f = track_feats(qr, qp, qz)
-        if f: Xq.append(f)
-    Xr, Xq = np.array(Xr), np.array(Xq)
-    print("=" * 66); print("TRACKER BINNING-QUANTIZATION TEST (real vs quantized-real)"); print("=" * 66)
-    print(f"{'feature':14s} {'real':>12s} {'quant-real':>12s} {'shift':>10s}   (gen ref, vertex model)")
-    genref = {"r_mono": 0.876, "z_r_resid": 168.0, "phi_r_resid": 0.181, "dr_std": 31.4}
-    for j, nm in enumerate(names):
-        gr = f"{genref[nm]:.3f}" if nm in genref else "-"
-        print(f"  {nm:12s} {Xr[:,j].mean():12.4f} {Xq[:,j].mean():12.4f} "
-              f"{(Xq[:,j].mean()-Xr[:,j].mean()):10.4f}   gen~{gr}")
+        tracks.append((lc, hits[a:b, 1:4]))
+
+    def feats_at(nb):
+        X = []
+        for lc, res in tracks:
+            if nb is None:
+                rr = res[:, 0] * LS[lc, 0] + LM[lc, 0]; pp = res[:, 1] * LS[lc, 1] + LM[lc, 1]; zz = res[:, 2] * LS[lc, 2] + LM[lc, 2]
+            else:
+                rr = quantize(res[:, 0], nb) * LS[lc, 0] + LM[lc, 0]
+                pp = quantize(res[:, 1], nb) * LS[lc, 1] + LM[lc, 1]
+                zz = quantize(res[:, 2], nb) * LS[lc, 2] + LM[lc, 2]
+            f = track_feats(rr, pp, zz)
+            if f: X.append(f)
+        return np.array(X)
+
+    Xr = feats_at(None)
+    print("=" * 74); print("TRACKER BINNING-RESOLUTION SWEEP (real vs quantized-real)"); print("=" * 74)
+    print(f"{'n_bins':>8s} " + " ".join(f"{n:>11s}" for n in names))
+    print(f"{'real':>8s} " + " ".join(f"{Xr[:,j].mean():11.4f}" for j in range(len(names))))
+    for nb in sweep:
+        Xq = feats_at(nb)
+        print(f"{nb:>8d} " + " ".join(f"{Xq[:,j].mean():11.4f}" for j in range(len(names))))
+    print("gen(128) ~ r_mono 0.876  z_r_resid 168  phi_r_resid 0.181  dr_std 31.4")
 
 
 if __name__ == "__main__":
