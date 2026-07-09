@@ -22,7 +22,11 @@ from genpu.detector_geometry import N_LAYERS, LAYER_MEANS, LAYER_STDS
 # Bin configuration for tokenized continuous features
 # r, phi, z: range [-3, 3] covers >99.9% of residuals
 # time: range [-1, 15] covers the heavy right tail
-N_BINS_SPATIAL = 128   # bins for r, phi, z
+# 512 (was 128): the binning-resolution sweep showed 128 bins forces r-ties that the raw
+# data doesn't have (quantized-real r_mono 0.86 vs real 0.998); 512 lifts the r_mono
+# ceiling to ~0.93 and converges phi_r_resid to real, at negligible cost. z_r_resid/dr_std
+# are unaffected by resolution (those are the AR, not the binning).
+N_BINS_SPATIAL = 512   # bins for r, phi, z
 N_BINS_TIME = 64       # fewer bins for time (less critical)
 
 SPATIAL_RANGE = (-3.0, 3.0)
