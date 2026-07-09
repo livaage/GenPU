@@ -138,7 +138,9 @@ class CaloFlow(nn.Module):
     def __init__(self, norm, embed_dim=64, hidden_pt=256, use_pdg=True, log_floor=None):
         super().__init__()
         self.cond = ParticleConditioning(embed_dim=embed_dim, use_pdg=use_pdg)
-        self.glob = GlobalHead(embed_dim=embed_dim)
+        # global = [total_logE, log_n] (+ [core_eta, core_phi] when the slice carries a
+        # per-shower core for the compactness fix); infer width from the norm buffers.
+        self.glob = GlobalHead(embed_dim=embed_dim, n_glob=int(len(norm["glob_mean"])))
         self.points = PointCFM(embed_dim=embed_dim, hidden=hidden_pt)
         self.energy = EnergyHead(embed_dim=embed_dim)
         for k, v in norm.items():

@@ -85,7 +85,7 @@ def main():
         with torch.no_grad():
             pi = va_pt_idx[torch.randint(len(va_pt_idx), (args.pt_batch,), device=dev)]
             ce = model.cond_embed(pt_contS[pi], pt_pdg[pi])
-            cfm = model.points.cfm_loss(posS[pi], ce, pt_globS[pi]).item()
+            cfm = model.points.cfm_loss(posS[pi], ce, pt_globS[pi][:, :2]).item()
             eh = model.energy.loss(ce, logE[pi], model.log_floor).item()
             si = va_sh_idx[torch.randint(len(va_sh_idx), (args.glob_batch,), device=dev)]
             g = model.glob.nll(model.cond_embed(contS[si], pdgT[si]), globS[si]).item()
@@ -97,7 +97,7 @@ def main():
         pi = tr_pt_idx[torch.randint(len(tr_pt_idx), (args.pt_batch,), device=dev)]
         si = tr_sh_idx[torch.randint(len(tr_sh_idx), (args.glob_batch,), device=dev)]
         ce = model.cond_embed(pt_contS[pi], pt_pdg[pi])
-        cfm = model.points.cfm_loss(posS[pi], ce, pt_globS[pi])
+        cfm = model.points.cfm_loss(posS[pi], ce, pt_globS[pi][:, :2])
         ehl = model.energy.loss(ce, logE[pi], model.log_floor)
         gnll = model.glob.nll(model.cond_embed(contS[si], pdgT[si]), globS[si])
         loss = cfm + ehl + args.glob_weight * gnll

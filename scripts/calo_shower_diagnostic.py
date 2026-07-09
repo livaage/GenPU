@@ -80,7 +80,7 @@ def main():
     g_n = np.clip(np.round(np.exp(g[:, 1])).astype(int), 1, int(t_n.max()) + 5)
     rep = torch.as_tensor(np.repeat(np.arange(len(val)), g_n), device=dev)
     with torch.no_grad():
-        pos_std = model.points.sample(ce[rep], g_std[rep], steps=args.steps)
+        pos_std = model.points.sample(ce[rep], g_std[rep][:, :2], steps=args.steps)
         logE = model.energy.sample(ce[rep], model.log_floor)
         pos = model.unstd_pos(pos_std).cpu().numpy()
     g_pts = np.concatenate([pos, logE[:, None].cpu().numpy()], axis=1)

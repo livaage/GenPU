@@ -70,14 +70,18 @@ def build(shards, preproc_dir, pdg_classes, min_hits, energy_mode):
                 e_coord = np.log(np.clip(e, 1e-12, None)).astype(np.float32)
             else:  # "frac"
                 e_coord = np.log(np.clip(e / tot, 1e-12, None)).astype(np.float32)
-            pts = np.stack([d_eta, d_phi, e_coord], axis=1)
+            # per-shower CORE (geometric centroid of the points) goes in the global;
+            # points are stored as tight DELTAS from the core so the flow learns
+            # per-shower compactness (fixes the i.i.d.-points width defect).
+            core_eta = float(d_eta.mean()); core_phi = float(d_phi.mean())
+            pts = np.stack([d_eta - core_eta, d_phi - core_phi, e_coord], axis=1)
             log_E_part = np.log(max(float(aux[i, AUX_ENERGY]), 1e-6))
             vr = float(np.hypot(aux[i, AUX_VX], aux[i, AUX_VY]))
             # shared conditioning contract (phi excluded — response is phi-invariant)
             cont_list.append([pf[i, PF_LOGPT], p_eta, log_E_part, pf[i, PF_CHARGE],
                               pf[i, PF_MASS], vr, aux[i, AUX_VZ]])
             pdg_list.append(pf[i, PF_PDG])
-            glob_list.append([np.log(tot), np.log(n)])
+            glob_list.append([np.log(tot), np.log(n), core_eta, core_phi])
             pts_list.append(pts)
             lengths.append(n)
             n_keep += 1
