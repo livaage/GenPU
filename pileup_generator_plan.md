@@ -249,6 +249,14 @@ which is fine-tuned last, not learned first.
   features) ONLY (v3) reproduces the marginal by construction. Result: AUC 0.994 -> 0.813, all
   energy features now Δ/σ<0.25. Remaining 0.81 is a softer multivariate residual (energy-tail
   shape + count), likely the i.i.d.-points structure — a separate, deeper fix.
+- **CALO PER-SHOWER RESIDUAL (diagnosed + partly fixed):** per-shower two-sample test (structure
+  features) isolated the residual to shower WIDTH/compactness — gen showers 2.3x too diffuse
+  (0.122 vs 0.053), NOT energy-position decoupling (pos_energy_corr was fine, refuting that).
+  Fix: per-shower CORE latent — global head generates the shower centroid, point flow models tight
+  DELTAS from it (conditioned on shape-globals only). Result: width 0.122->0.064 (~truth 0.053),
+  per-shower AUC 0.73->0.67 (linear 0.55, i.e. remaining is soft nonlinear). Diminishing returns.
+  NOTE: the event gate (0.813) is energy-only / spatially blind, so this per-shower fix doesn't
+  move it — the event-gate lever is the separate energy-TAIL residual (logE_p90/frac_near_floor).
 - Acceptance: CaloChallenge-style metrics — total energy response and resolution vs true E,
   layer-wise energy fractions, shower width/depth profiles, cell energy spectrum (check the
   low-energy tail vs threshold), point-count distributions. Per species.
