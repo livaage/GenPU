@@ -91,7 +91,7 @@ class PointCFM(nn.Module):
 
 
 class EnergyHead(nn.Module):
-    """Per-cell log-E: at-floor Bernoulli + Gaussian above the floor.
+    """Per-cell log-E: at-floor Bernoulli + Gaussian MIXTURE above the floor.
 
     Conditioned on cond_embed (the PARTICLE features) ONLY — deliberately NOT on
     cell position or the global (total_logE, log_n). Both of those are SAMPLED /
@@ -103,31 +103,38 @@ class EnergyHead(nn.Module):
     match truth by construction. log-E is PHYSICAL; floor = zero-suppression thresh.
     """
 
-    def __init__(self, embed_dim=64, hidden=128, floor_eps=0.05):
+    def __init__(self, embed_dim=64, hidden=128, floor_eps=0.05, n_mix=3):
         super().__init__()
-        self.net = mlp([embed_dim, hidden, hidden, 3])  # floor_logit, mu, log_sigma
+        self.n_mix = n_mix
+        # floor_logit + n_mix*(weight_logit, mu, log_sigma): a K-Gaussian MIXTURE over
+        # above-floor log-E captures the skewed tail a single Gaussian misses (the
+        # event-gate residual was logE_p90 / frac_near_floor).
+        self.net = mlp([embed_dim, hidden, hidden, 1 + 3 * n_mix])
         self.floor_eps = floor_eps
 
     def _out(self, cond_embed):
         o = self.net(cond_embed)
-        floor_logit, mu, log_sigma = o[:, 0], o[:, 1], o[:, 2].clamp(-4, 3)
-        return floor_logit, mu, log_sigma
+        m = o[:, 1:].view(-1, self.n_mix, 3)
+        return o[:, 0], m[..., 0], m[..., 1], m[..., 2].clamp(-4, 3)  # floor_logit, w_logit, mu, log_sigma
 
     def loss(self, cond_embed, logE, log_floor):
         is_floor = (logE <= log_floor + self.floor_eps).float()
-        floor_logit, mu, log_sigma = self._out(cond_embed)
+        floor_logit, w_logit, mu, ls = self._out(cond_embed)
         bce = F.binary_cross_entropy_with_logits(floor_logit, is_floor)
-        # Gaussian NLL on above-floor cells only
+        logw = F.log_softmax(w_logit, dim=-1)                            # (N,K)
+        comp = -0.5 * ((logE.unsqueeze(-1) - mu) / ls.exp()) ** 2 - ls    # (N,K), up to const
+        logp = torch.logsumexp(logw + comp, dim=-1)                       # (N,)
         above = 1.0 - is_floor
-        nll = 0.5 * (((logE - mu) / log_sigma.exp()) ** 2 + 2 * log_sigma)
-        gnll = (nll * above).sum() / above.sum().clamp(min=1.0)
+        gnll = (-logp * above).sum() / above.sum().clamp(min=1.0)
         return bce + gnll
 
     @torch.no_grad()
     def sample(self, cond_embed, log_floor):
-        floor_logit, mu, log_sigma = self._out(cond_embed)
+        floor_logit, w_logit, mu, ls = self._out(cond_embed)
         at_floor = torch.rand_like(floor_logit) < torch.sigmoid(floor_logit)
-        logE = mu + torch.randn_like(mu) * log_sigma.exp()
+        k = torch.distributions.Categorical(logits=w_logit).sample()     # (N,)
+        mu_k = mu.gather(1, k[:, None])[:, 0]; ls_k = ls.gather(1, k[:, None])[:, 0]
+        logE = mu_k + torch.randn_like(mu_k) * ls_k.exp()
         logE = torch.where(at_floor, torch.full_like(logE, log_floor), logE)
         return logE.clamp(min=log_floor)
 
