@@ -310,6 +310,11 @@ which is fine-tuned last, not learned first.
   physics). Best calo = photon_coremixgf_v1 (core latent + global mixture + energy mixture +
   soft floor). Calo status: d_eta/d_phi peaks matched, log_E matched end-to-end, per-shower feats
   matched, event gate ~0.65 / per-shower ~0.61. DONE.
+- **CALO ODE-STEP TEST (50->200): NO change.** d_eta/d_phi peak tip stays 5.9/8.6 vs real
+  6.7/9.5 (~6% shortfall at the very tip). => the gap is the continuous flow's FUNDAMENTAL
+  smoothness (Gaussian->ODE can't make a delta) + core*delta convolution broadening, NOT
+  integration coarseness. More steps won't help. Only fix = a discrete leading-cell component
+  (diminishing returns). ACCEPT the tip gap; calo otherwise fully matched.
 - Acceptance: CaloChallenge-style metrics — total energy response and resolution vs true E,
   layer-wise energy fractions, shower width/depth profiles, cell energy spectrum (check the
   low-energy tail vs threshold), point-count distributions. Per species.
