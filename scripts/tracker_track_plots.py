@@ -43,6 +43,7 @@ def main():
     ap.add_argument("--use_vertex", action="store_true")
     ap.add_argument("--use_helix", action="store_true")
     ap.add_argument("--max_hits", type=int, default=32)
+    ap.add_argument("--outdir", default=None, help="output dir (default: <ckpt>/eval)")
     args = ap.parse_args()
     dev = "cuda" if torch.cuda.is_available() else "cpu"; rng = np.random.default_rng(1)
 
@@ -91,7 +92,8 @@ def main():
             if k >= 6 and len(gen_tracks) < 6:
                 gen_tracks.append((gr, gp, gz))
     Xr, Xg = np.array(Xr), np.array(Xg)
-    outdir = Path(args.ckpt).parent / "eval"; outdir.mkdir(exist_ok=True)
+    outdir = Path(args.outdir) if args.outdir else Path(args.ckpt).parent / "eval"
+    outdir.mkdir(parents=True, exist_ok=True)
 
     # ---- example tracks (r-z and x-y), real vs gen ----
     fig, ax = plt.subplots(2, 6, figsize=(20, 7))
