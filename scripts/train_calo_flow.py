@@ -24,6 +24,8 @@ def main():
     ap.add_argument("--log_every", type=int, default=200)
     ap.add_argument("--save_every", type=int, default=10000)
     ap.add_argument("--run_name", default="calo_flow_photon_v1")
+    ap.add_argument("--pos_transform", choices=["none", "arcsinh"], default="none",
+                    help="warp d_eta/d_phi so the flow doesn't have to fit a near-delta spike")
     ap.add_argument("--no_wandb", action="store_true")
     args = ap.parse_args()
 
@@ -50,14 +52,29 @@ def main():
     tr_pt = tr_sh[point_shower]
 
     log_floor = float(d["log_floor"]) if "log_floor" in d else float(np.log(5e-5))
-    model = CaloFlow(norm, log_floor=log_floor).to(dev)
+
+    # position coordinate warp: arcsinh(delta/s) de-peaks the near-delta d_eta/d_phi so
+    # the flow fits a broad distribution; s per-dim = median(|delta|). pts_mean/std are
+    # then recomputed over WARP space (the flow standardizes in warp space; unstd_pos
+    # inverts with sinh). No slice rebuild needed.
+    pos_s = [0.0, 0.0]
+    if args.pos_transform == "arcsinh":
+        pos_s = np.maximum(np.median(np.abs(pts[:, :2]), axis=0), 1e-4).astype(np.float32)
+        warp = np.arcsinh(pts[:, :2] / pos_s)
+        norm = dict(norm)
+        norm["pts_mean"] = np.concatenate([warp.mean(0), norm["pts_mean"][2:]]).astype(np.float32)
+        norm["pts_std"] = np.concatenate([warp.std(0), norm["pts_std"][2:]]).astype(np.float32)
+        print(f"pos warp arcsinh: s={pos_s}  warp mean={warp.mean(0)} std={warp.std(0)}")
+        pos_s = pos_s.tolist()
+    model = CaloFlow(norm, log_floor=log_floor, pos_arcsinh_s=pos_s).to(dev)
 
     # standardise & move to GPU. Points: positions (d_eta,d_phi) standardised for
     # the flow; log-E kept in PHYSICAL units for the energy head + floor.
     contS = torch.as_tensor((cont - norm["cont_mean"]) / norm["cont_std"], dtype=torch.float32, device=dev)
     pdgT = torch.as_tensor(pdg, dtype=torch.long, device=dev)
     globS = torch.as_tensor((glob - norm["glob_mean"]) / norm["glob_std"], dtype=torch.float32, device=dev)
-    posS = torch.as_tensor((pts[:, :2] - norm["pts_mean"][:2]) / norm["pts_std"][:2], dtype=torch.float32, device=dev)
+    with torch.no_grad():
+        posS = model.std_pos(torch.as_tensor(pts[:, :2], dtype=torch.float32, device=dev))
     logE = torch.as_tensor(pts[:, 2], dtype=torch.float32, device=dev)
     psh = torch.as_tensor(point_shower, device=dev)
     pt_contS, pt_pdg, pt_globS = contS[psh], pdgT[psh], globS[psh]

@@ -156,7 +156,8 @@ class EnergyHead(nn.Module):
 class CaloFlow(nn.Module):
     """Shared conditioning + global/position/energy heads, with (un)standardisation buffers."""
 
-    def __init__(self, norm, embed_dim=64, hidden_pt=256, use_pdg=True, log_floor=None):
+    def __init__(self, norm, embed_dim=64, hidden_pt=256, use_pdg=True, log_floor=None,
+                 pos_arcsinh_s=None):
         super().__init__()
         self.cond = ParticleConditioning(embed_dim=embed_dim, use_pdg=use_pdg)
         # global = [total_logE, log_n] (+ [core_eta, core_phi] when the slice carries a
@@ -169,6 +170,14 @@ class CaloFlow(nn.Module):
         if log_floor is None:
             log_floor = float(torch.log(torch.tensor(5e-5)))
         self.register_buffer("log_floor", torch.tensor(float(log_floor)))
+        # position coordinate warp: the d_eta/d_phi flow target is a near-delta spike a
+        # continuous flow can't reproduce (Gaussian->ODE stays smooth). arcsinh(pos/s)
+        # spreads the spike into a broad region the flow fits easily; invert with sinh at
+        # generation -> the sharp peak is recovered exactly. s>0 (per-dim) enables it. The
+        # pts_mean/pts_std buffers are then WARP-space stats (set by the trainer, saved here).
+        if pos_arcsinh_s is None:
+            pos_arcsinh_s = [0.0, 0.0]
+        self.register_buffer("pos_arcsinh_s", torch.as_tensor(pos_arcsinh_s, dtype=torch.float32))
 
     # standardisation helpers
     def std_cont(self, cont):
@@ -177,14 +186,22 @@ class CaloFlow(nn.Module):
     def std_glob(self, glob):
         return (glob - self.glob_mean) / self.glob_std
 
+    def _pos_warp(self, pos):        # physical delta -> warp space
+        s = self.pos_arcsinh_s
+        return torch.asinh(pos / s) if bool((s > 0).all()) else pos
+
+    def _pos_unwarp(self, t):        # warp space -> physical delta
+        s = self.pos_arcsinh_s
+        return s * torch.sinh(t) if bool((s > 0).all()) else t
+
     def std_pos(self, pos):
-        return (pos - self.pts_mean[:2]) / self.pts_std[:2]
+        return (self._pos_warp(pos) - self.pts_mean[:2]) / self.pts_std[:2]
 
     def unstd_glob(self, g):
         return g * self.glob_std + self.glob_mean
 
     def unstd_pos(self, p):
-        return p * self.pts_std[:2] + self.pts_mean[:2]
+        return self._pos_unwarp(p * self.pts_std[:2] + self.pts_mean[:2])
 
     def cond_embed(self, cont_std, pdg):
         return self.cond(cont_std, pdg)
