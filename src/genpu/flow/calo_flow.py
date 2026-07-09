@@ -157,7 +157,7 @@ class CaloFlow(nn.Module):
     """Shared conditioning + global/position/energy heads, with (un)standardisation buffers."""
 
     def __init__(self, norm, embed_dim=64, hidden_pt=256, use_pdg=True, log_floor=None,
-                 pos_arcsinh_s=None):
+                 pos_arcsinh_s=None, glob_arcsinh_s=None):
         super().__init__()
         self.cond = ParticleConditioning(embed_dim=embed_dim, use_pdg=use_pdg)
         # global = [total_logE, log_n] (+ [core_eta, core_phi] when the slice carries a
@@ -178,13 +178,27 @@ class CaloFlow(nn.Module):
         if pos_arcsinh_s is None:
             pos_arcsinh_s = [0.0, 0.0]
         self.register_buffer("pos_arcsinh_s", torch.as_tensor(pos_arcsinh_s, dtype=torch.float32))
+        # same warp for the per-shower CORE dims of the global head (the sharp core peak
+        # under-fills the mixture): per-glob s (0 = no warp, e.g. total_logE / log_n).
+        if glob_arcsinh_s is None:
+            glob_arcsinh_s = [0.0] * int(len(norm["glob_mean"]))
+        self.register_buffer("glob_arcsinh_s", torch.as_tensor(glob_arcsinh_s, dtype=torch.float32))
 
     # standardisation helpers
     def std_cont(self, cont):
         return (cont - self.cont_mean) / self.cont_std
 
+    def _glob_warp(self, glob):      # physical globals -> warp space (core dims only)
+        s = self.glob_arcsinh_s
+        s_safe = torch.where(s > 0, s, torch.ones_like(s))
+        return torch.where(s > 0, torch.asinh(glob / s_safe), glob)
+
+    def _glob_unwarp(self, g):       # warp space -> physical globals
+        s = self.glob_arcsinh_s
+        return torch.where(s > 0, s * torch.sinh(g), g)
+
     def std_glob(self, glob):
-        return (glob - self.glob_mean) / self.glob_std
+        return (self._glob_warp(glob) - self.glob_mean) / self.glob_std
 
     def _pos_warp(self, pos):        # physical delta -> warp space
         s = self.pos_arcsinh_s
@@ -198,7 +212,7 @@ class CaloFlow(nn.Module):
         return (self._pos_warp(pos) - self.pts_mean[:2]) / self.pts_std[:2]
 
     def unstd_glob(self, g):
-        return g * self.glob_std + self.glob_mean
+        return self._glob_unwarp(g * self.glob_std + self.glob_mean)
 
     def unstd_pos(self, p):
         return self._pos_unwarp(p * self.pts_std[:2] + self.pts_mean[:2])

@@ -58,22 +58,34 @@ def main():
     # then recomputed over WARP space (the flow standardizes in warp space; unstd_pos
     # inverts with sinh). No slice rebuild needed.
     pos_s = [0.0, 0.0]
+    G = len(norm["glob_mean"])
+    glob_s = [0.0] * G
     if args.pos_transform == "arcsinh":
+        norm = dict(norm)
+        # warp d_eta/d_phi deltas (flow target)
         pos_s = np.maximum(np.median(np.abs(pts[:, :2]), axis=0), 1e-4).astype(np.float32)
         warp = np.arcsinh(pts[:, :2] / pos_s)
-        norm = dict(norm)
         norm["pts_mean"] = np.concatenate([warp.mean(0), norm["pts_mean"][2:]]).astype(np.float32)
         norm["pts_std"] = np.concatenate([warp.std(0), norm["pts_std"][2:]]).astype(np.float32)
-        print(f"pos warp arcsinh: s={pos_s}  warp mean={warp.mean(0)} std={warp.std(0)}")
         pos_s = pos_s.tolist()
-    model = CaloFlow(norm, log_floor=log_floor, pos_arcsinh_s=pos_s).to(dev)
+        # warp the per-shower CORE global dims (2,3 = core_eta, core_phi) if present
+        gs = np.zeros(G, np.float32)
+        if G >= 4:
+            gs[2:4] = np.maximum(np.median(np.abs(glob[:, 2:4]), axis=0), 1e-4)
+            gw = np.arcsinh(glob[:, 2:4] / gs[2:4])
+            gm = norm["glob_mean"].copy(); gstd = norm["glob_std"].copy()
+            gm[2:4] = gw.mean(0); gstd[2:4] = gw.std(0)
+            norm["glob_mean"] = gm.astype(np.float32); norm["glob_std"] = gstd.astype(np.float32)
+        glob_s = gs.tolist()
+        print(f"warp arcsinh: pos_s={pos_s}  glob_s={glob_s}")
+    model = CaloFlow(norm, log_floor=log_floor, pos_arcsinh_s=pos_s, glob_arcsinh_s=glob_s).to(dev)
 
     # standardise & move to GPU. Points: positions (d_eta,d_phi) standardised for
     # the flow; log-E kept in PHYSICAL units for the energy head + floor.
     contS = torch.as_tensor((cont - norm["cont_mean"]) / norm["cont_std"], dtype=torch.float32, device=dev)
     pdgT = torch.as_tensor(pdg, dtype=torch.long, device=dev)
-    globS = torch.as_tensor((glob - norm["glob_mean"]) / norm["glob_std"], dtype=torch.float32, device=dev)
     with torch.no_grad():
+        globS = model.std_glob(torch.as_tensor(glob, dtype=torch.float32, device=dev))
         posS = model.std_pos(torch.as_tensor(pts[:, :2], dtype=torch.float32, device=dev))
     logE = torch.as_tensor(pts[:, 2], dtype=torch.float32, device=dev)
     psh = torch.as_tensor(point_shower, device=dev)
