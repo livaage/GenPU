@@ -92,6 +92,28 @@ layer-*mean* framing in favour of a track-relative / local one.
 Flat token stream, `surface_id` geometry, local coords, end token, state features, sliding-window
 attention. Biggest change; defer until B validates the hypothesis.
 
+## 4a. HARD CONSTRAINT — learned, not analytic (do not skip)
+
+The position must be produced by a **learned head conditioned on the state**, never computed from
+params via detector geometry (no circle–cylinder intersection math in the generation path). Analytic
+derivation = helix-z rebuilt: it bakes in the ideal-helix assumption and cannot represent multiple
+scattering, soft-p_T spirals, kinks, secondaries, or layer inefficiency — the parts that make this
+hard. The derived `true_xyz` direction is a **training target / auxiliary supervision** for the
+state, NOT a generator; at inference the state AND the position are both predicted (learned).
+
+Note (from the smearing check): real hits ARE near-deterministic given the trajectory, so a *sharp*
+position prediction for clean tracks is correct — the model must LEARN that sharpness (and learn to
+be BROAD for scattering tracks), not have it hard-coded, and must still learn which layers fire,
+the stopping point, per-track scatter amplitude, and non-ideal tracks. The position head predicts
+the full tokenized distribution conditioned on the state — never "pick one of N analytic candidates".
+
+**Verification gate before trusting v2:**
+1. Beat a dumb **analytic-helix baseline** on NON-ideal tracks (soft-p_T / scattering / secondary).
+   Only tying on clean tracks ⇒ we baked in the helix.
+2. **Ablate the state** — coherence must degrade without it (proves the state does the work).
+3. Position distribution **non-trivial** where physics says so (broad for scatterers, sharp for
+   clean), matching real — not a delta.
+
 ## 5. Minimal prototype (what to build first)
 
 Goal: test the single hypothesis **"an explicit carried state fixes coherence"** with the least
