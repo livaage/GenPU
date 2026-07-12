@@ -69,13 +69,24 @@ the data level. NET: the coherence spikes are real (smearing≈0), so the ONLY r
 is the model's per-hit sampling floor -> Option B is the right and only lever.
 
 ### Option B — state-carrying AR (the paper's idea, adapted to our data) — RECOMMENDED
-Carry an explicit **trajectory-direction state** per hit. Since we lack per-hit momentum, derive it
-from `true_x/y/z`: `tangentᵢ = normalize(true_posᵢ − true_posᵢ₋₁)` (2 angles) — a per-hit,
-supervisable, physical proxy for "momentum direction after the hit." Then:
-- predict the direction state per hit (tokenized), **feed it back**;
-- predict the position **conditioned on the current state** (small offset from where the state
-  points), so all hits share one evolving trajectory → coherence + persistence by construction;
-- add an **END token** → learn stopping → drop truth-`n_hits`.
+Two changes together (they go hand in hand — do NOT keep the layer-mean residual):
+1. **Carry an explicit trajectory state** per hit. Lacking per-hit momentum, derive a direction
+   from `true_x/y/z`: `tangentᵢ = normalize(true_posᵢ − true_posᵢ₋₁)` (2 angles) — a supervisable
+   physical proxy for "momentum direction after the hit". Predict it (tokenized) and **feed it
+   back**.
+2. **Replace the layer-mean residual** with a position parametrized off the state: the state points
+   to where the trajectory crosses the next layer; predict the hit as a small **scattering residual
+   from THAT point** (tiny, track-dependent), or as absolute **local coordinates**. Keep the
+   binning/tokenization (sharp marginals) — only change WHAT is binned: not deviation-from-layer-
+   average, but deviation-from-this-track's-trajectory (or a local coord).
+
+Result: all hits share one evolving state → coherence + persistence by construction; the token is
+physically meaningful; the track-level structure lives in the state, not inferred from residuals.
+Then add an **END token** → learn stopping → drop truth-`n_hits`.
+
+NOTE: the paper predicts local *module* surface coords + momentum — i.e. a local (relative)
+position is fine; the substantive addition over our current model is the STATE, plus dropping the
+layer-*mean* framing in favour of a track-relative / local one.
 
 ### Option C — full paper-style rebuild
 Flat token stream, `surface_id` geometry, local coords, end token, state features, sliding-window
