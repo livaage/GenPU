@@ -24,6 +24,7 @@ def main():
     ap.add_argument("--run_name", default="tracker_pion_v1")
     ap.add_argument("--max_particles", type=int, default=0, help="subsample to first N particles (0=all; for CPU smoke tests)")
     ap.add_argument("--use_vertex", action="store_true", help="seed AR with production vertex (vr,vz)")
+    ap.add_argument("--min_hits_train", type=int, default=1, help="train only on tracks with >= this many hits")
     ap.add_argument("--use_helix", action="store_true", help="reparametrize z as deviation from analytic trajectory")
     ap.add_argument("--no_wandb", action="store_true")
     args = ap.parse_args()
@@ -49,6 +50,14 @@ def main():
     val_p = np.zeros(S, bool); val_p[perm[:n_val]] = True
     tr_idx = np.where(~val_p)[0]
     va_idx = np.where(val_p)[0]
+    # optional: train only on tracks with >= min_hits_train hits (test the two-population
+    # decomposition — specialise the coherent-track model on real trajectories, not the 43%
+    # single-hit material fragments).
+    if args.min_hits_train > 1:
+        nph_ = off[1:] - off[:-1]
+        tr_idx = tr_idx[nph_[tr_idx] >= args.min_hits_train]
+        va_idx = va_idx[nph_[va_idx] >= args.min_hits_train]
+        print(f"min_hits_train={args.min_hits_train}: train tracks {len(tr_idx)} (of {S})")
 
     # standardise cont on CPU; hits/offsets stay on CPU for per-batch padding.
     contS = ((cont - norm["cont_mean"]) / norm["cont_std"]).astype(np.float32)
