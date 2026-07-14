@@ -69,3 +69,15 @@ Per particle, sorted inner→outer by measured r:
 AR state drift at generation; harder phase space than the paper; derived (not true-momentum) state;
 big surface area. Mitigations: state ablation + analytic baseline as guardrails; scheduled sampling
 if drift shows.
+
+## RESULT — 30k pion eval (first signal)
+
+- **Direction supervision HELPS coherence:** half-persist v1 0.58 -> v2 0.65 (ablated), near real
+  0.68. The auxiliary direction task improved the learned representation.
+- **State FEEDBACK backfires (exposure bias / drift):** with-state 0.567 < ablated 0.647 — feeding
+  the model's OWN noisy predicted direction back compounds error. Fix options: (a) auxiliary-only
+  (drop feedback — already beats v1), (b) scheduled sampling (train on own predictions).
+- **Stop head roughly works but length not matched** (gen too long: r_mean 390 vs 308) — confounds
+  z_r_resid (252 vs 152) and per-track AUC (0.85 vs v1 0.80). Needs length/stop tuning.
+- Verdict: IDEA validated (explicit direction improves coherence); FEEDBACK mechanism needs a fix;
+  stop head needs tuning. Caveats: 30k (undertrained), pion-only.
