@@ -23,7 +23,7 @@ def main():
     dev = "cuda" if torch.cuda.is_available() else "cpu"; rng = np.random.default_rng(0)
     d = np.load(args.slice)
     cont, pdg = d["cont"], d["pdg"]
-    nh = d["n_hits"] if "n_hits" in d else np.diff(d["offsets"])
+    nh = (d["n_hits"] if "n_hits" in d else np.diff(d["offsets"])).astype(np.int64)
     has_d0 = "d0" in d
     d0 = d["d0"] if has_d0 else np.zeros(len(nh), np.float32)
     cm, cs = d["cont_mean"], d["cont_std"]
