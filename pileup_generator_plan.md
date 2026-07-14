@@ -475,3 +475,19 @@ analytic decay sampler. Re-scope M0 decay accordingly.
   truth-count crutch **0.757** — only +0.05 cost to self-generate counts. gen n_hits mean 9.61
   (real 9.78), median 10 both. Residual: slightly too few hits/pion (9.45 vs 9.96). => honest
   tracker pileup generator validated (charged pions). Next: broaden to all species / full event.
+
+## Tracking understanding REDONE on correct data (post event-join-bug fix)
+
+- **Particle type matters strongly** (buggy data hid it): pi/K median 10 (long), proton median 3
+  (interacts), photon/neutron median 1 (neutral), e median ~6 (curl/brem).
+- **Primary vs secondary is the dominant split** (truth flag): PRIMARY 17% median 11 hits (long,
+  from beamline); SECONDARY 83% median 1 hit (short, born at silicon layers). material.png
+  regenerated (correct) shows the clean two-population n_hits (primary hump ~12, secondary spike 1)
+  + secondaries born at every barrel layer.
+- **Length IS predictable** (not stochastic): corr(n_hits,.) logpt +0.50, primary +0.43, log|d0|
+  -0.46, |vz| -0.34. Count head NLL 1.2 on correct data (vs 2.2 on buggy).
+- **d0 predicts (5x across bins) but is REDUNDANT with vr** (count head NLL gain from d0 = +0.006).
+  Not worth adding. User's original "d0 redundant" was right on correct data too.
+- **Honest tracker gate stays 0.806** (count_head_ms, consistent norm). The 0.92 with the
+  count_stage2 head was a norm-mismatch artifact (trained on count_stage2 norm, gate fed
+  multispecies norm) - not a real result. count_head_ms.pt is the valid count head.
