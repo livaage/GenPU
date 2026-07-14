@@ -56,7 +56,7 @@ def _split_hits(hits: np.ndarray):
     return lc, phys
 
 
-def build(shards, preproc_dir, pdg_classes, min_hits):
+def build(shards, preproc_dir, pdg_classes, min_hits, population="all"):
     # cont features follow genpu.conditioning.CONT_FEATURES:
     #   log_pt, eta, log_E, charge, mass, vr, vz
     cont_list, pdg_list, hits_list, lengths = [], [], [], []
@@ -68,7 +68,12 @@ def build(shards, preproc_dir, pdg_classes, min_hits):
         d = np.load(f)
         pf, aux = d["particle_features"], d["particle_aux"]
         th, off = d["tracker_hits_flat"], d["tracker_offsets"]
-        sel = np.where(np.isin(pf[:, PF_PDG], pdg_classes))[0]
+        mask = np.isin(pf[:, PF_PDG], pdg_classes)
+        if population == "primary":
+            mask &= aux[:, AUX_PRIMARY] > 0.5           # truth primary flag
+        elif population == "secondary":
+            mask &= aux[:, AUX_PRIMARY] <= 0.5
+        sel = np.where(mask)[0]
         n_keep = 0
         for i in sel:
             a, b = off[i], off[i + 1]
@@ -109,9 +114,10 @@ def main():
     # PDG classes (see preprocessing.py): 2=photon; 3,4=pi+-; 5,6=K+-; 7,8=p; 9,10=n
     ap.add_argument("--pdg_class", type=int, nargs="+", default=[3, 4])
     ap.add_argument("--min_hits", type=int, default=1)
+    ap.add_argument("--population", choices=["all", "primary", "secondary"], default="all")
     args = ap.parse_args()
 
-    cont, pdg, hits, offsets, occ = build(args.shards, args.preproc_dir, args.pdg_class, args.min_hits)
+    cont, pdg, hits, offsets, occ = build(args.shards, args.preproc_dir, args.pdg_class, args.min_hits, args.population)
     S = cont.shape[0]
 
     # standardisation stats (fit on this slice; saved for train/eval).
