@@ -36,10 +36,16 @@ DIR_RANGE = (-3.1416, 3.1416)
 class TrackerStateARModel(nn.Module):
     """Causal transformer decoder with tokenized position + an explicit direction state + stop."""
 
-    def __init__(self, cond_dim=64, model_dim=128, n_layers=4, n_heads=4, max_hits=32, dropout=0.0):
+    def __init__(self, cond_dim=64, model_dim=128, n_layers=4, n_heads=4, max_hits=32, dropout=0.0,
+                 state_feedback=True):
         super().__init__()
         self.model_dim = model_dim
         self.max_hits = max_hits
+        # state_feedback: feed the predicted direction back into the next step's input. The 30k/70k
+        # eval showed this DRIFTS (exposure bias: trained on true dir, generates from its own noisy
+        # one) and net-hurts coherence, while the direction as AUXILIARY supervision helps. So
+        # default-off now: keep the dir head (supervision) but don't feed it back.
+        self.state_feedback = state_feedback
 
         # --- token embeddings (position, v1) ---
         self.layer_embedding = nn.Embedding(N_LAYERS + 1, model_dim // 4)
@@ -94,14 +100,16 @@ class TrackerStateARModel(nn.Module):
         """Embed a hit: position tokens + abspos feedback + DIRECTION-STATE feedback."""
         tok = torch.cat([self.layer_embedding(layer), self.r_embedding(rb), self.phi_embedding(pb),
                          self.z_embedding(zb), self.time_embedding(tb)], dim=-1)
-        state = torch.cat([self.dth_embedding(thb), self.dal_embedding(alb)], dim=-1)  # carried state
         lc = layer.clamp(0, N_LAYERS - 1)
         lm, ls = self._layer_means[lc], self._layer_stds[lc]
         r_phys = self._spatial_centers[rb] * ls[..., 0] + lm[..., 0]
         phi_phys = self._spatial_centers[pb] * ls[..., 1] + lm[..., 1]
         z_phys = self._spatial_centers[zb] * ls[..., 2] + lm[..., 2]
         abspos = torch.stack([r_phys / 1000.0, torch.sin(phi_phys), torch.cos(phi_phys), z_phys / 3000.0], dim=-1)
-        return tok + state + self.abspos_proj(abspos)
+        h = tok + self.abspos_proj(abspos)
+        if self.state_feedback:                                       # carried state (default off; drifts)
+            h = h + torch.cat([self.dth_embedding(thb), self.dal_embedding(alb)], dim=-1)
+        return h
 
     def _vertex_embed(self, vertex_pos):
         vr, vz = vertex_pos[:, 0], vertex_pos[:, 1]
@@ -114,7 +122,7 @@ class TrackerStateARModel(nn.Module):
         h = h + self.pos_embedding(torch.arange(seq, device=device)).unsqueeze(0)
         return self.decoder(tgt=h, memory=self.cond_proj(cond).unsqueeze(1), tgt_mask=self._causal_mask(seq, device))
 
-    def loss(self, layer, continuous, direction, cond, n_hits, vertex_pos):
+    def loss(self, layer, continuous, direction, cond, n_hits, vertex_pos, stop_pos_weight=1.0):
         """Teacher-forced. Sequence = [vertex, hit_0..hit_{N-1}]; output i predicts hit i (+ stop)."""
         B, N = layer.shape
         device = layer.device
@@ -138,7 +146,9 @@ class TrackerStateARModel(nn.Module):
         pos_l = (ce(self.r_head(h), rb, N_BINS_SPATIAL) + ce(self.phi_head(h), pb, N_BINS_SPATIAL)
                  + ce(self.z_head(h), zb, N_BINS_SPATIAL) + ce(self.time_head(h), tb, N_BINS_TIME)) / 4
         dir_l = (ce(self.dth_head(h), thb, N_BINS_DIR) + ce(self.dal_head(h), alb, N_BINS_DIR)) / 2
-        stop_l = F.binary_cross_entropy_with_logits(self.stop_head(h).squeeze(-1).reshape(-1)[fm], stop_t.reshape(-1)[fm])
+        stop_l = F.binary_cross_entropy_with_logits(
+            self.stop_head(h).squeeze(-1).reshape(-1)[fm], stop_t.reshape(-1)[fm],
+            pos_weight=torch.tensor(stop_pos_weight, device=layer.device))   # positives (stop=1) are rare
         return {"layer": layer_l, "pos": pos_l, "dir": dir_l, "stop": stop_l,
                 "total": layer_l + pos_l + dir_l + stop_l}
 
@@ -189,12 +199,13 @@ class TrackerStateARModel(nn.Module):
 class TrackerStateModel(nn.Module):
     """Shared conditioning + v2 state-carrying AR, with cont (un)standardisation buffers."""
 
-    def __init__(self, norm, embed_dim=64, model_dim=128, n_layers=4, n_heads=4, max_hits=32, use_pdg=True):
+    def __init__(self, norm, embed_dim=64, model_dim=128, n_layers=4, n_heads=4, max_hits=32,
+                 use_pdg=True, state_feedback=True):
         super().__init__()
         from genpu.conditioning import ParticleConditioning
         self.cond = ParticleConditioning(embed_dim=embed_dim, use_pdg=use_pdg)
         self.tracker = TrackerStateARModel(cond_dim=embed_dim, model_dim=model_dim, n_layers=n_layers,
-                                           n_heads=n_heads, max_hits=max_hits)
+                                           n_heads=n_heads, max_hits=max_hits, state_feedback=state_feedback)
         for k, v in norm.items():
             self.register_buffer(k, torch.as_tensor(v, dtype=torch.float32))
 

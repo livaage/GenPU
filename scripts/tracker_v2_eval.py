@@ -69,13 +69,14 @@ def main():
     ap.add_argument("--ckpt", required=True)
     ap.add_argument("--slice", default="/scratch/gpfs/IOJALVO/lv7805/genpu_data/tracker_slice/v2_pion.npz")
     ap.add_argument("--n_tracks", type=int, default=15000)
+    ap.add_argument("--state_feedback", action="store_true", help="match a feedback-trained ckpt")
     args = ap.parse_args()
     dev = "cuda" if torch.cuda.is_available() else "cpu"; rng = np.random.default_rng(0)
     d = np.load(args.slice)
     cont, pdg, hits, off = d["cont"], d["pdg"], d["hits"], d["offsets"]
     norm = {"cont_mean": d["cont_mean"], "cont_std": d["cont_std"]}
     val = rng.permutation(cont.shape[0])[:args.n_tracks]
-    model = TrackerStateModel(norm).to(dev)
+    model = TrackerStateModel(norm, state_feedback=args.state_feedback).to(dev)
     model.load_state_dict(torch.load(args.ckpt, map_location=dev)["model"]); model.eval()
     LM, LS = LAYER_MEANS, LAYER_STDS
 

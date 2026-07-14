@@ -21,6 +21,10 @@ def main():
     ap.add_argument("--log_every", type=int, default=200)
     ap.add_argument("--save_every", type=int, default=10000)
     ap.add_argument("--run_name", default="tracker_v2_pion_v1")
+    ap.add_argument("--state_feedback", action="store_true",
+                    help="feed predicted direction back (drifts; default OFF = auxiliary-only)")
+    ap.add_argument("--stop_pos_weight", type=float, default=0.0,
+                    help="pos_weight for the stop BCE; 0 = auto (mean n_hits - 1)")
     ap.add_argument("--no_wandb", action="store_true")
     args = ap.parse_args()
 
@@ -35,7 +39,10 @@ def main():
     val_p = np.zeros(S, bool); val_p[perm[:n_val]] = True
     tr_idx = np.where(~val_p)[0]; va_idx = np.where(val_p)[0]
 
-    model = TrackerStateModel(norm, max_hits=M).to(dev)
+    model = TrackerStateModel(norm, max_hits=M, state_feedback=args.state_feedback).to(dev)
+    nph_all = np.clip(off[1:] - off[:-1], 1, M)
+    stop_pw = args.stop_pos_weight if args.stop_pos_weight > 0 else float(nph_all.mean() - 1)
+    print(f"state_feedback={args.state_feedback}  stop_pos_weight={stop_pw:.2f}")
     contS = ((cont - norm["cont_mean"]) / norm["cont_std"]).astype(np.float32)
     lc_all = hits[:, 0].astype(np.int64)
     resid_all = hits[:, 1:5].astype(np.float32)      # r,phi,z,time
@@ -58,7 +65,7 @@ def main():
     def step_loss(idx):
         layer, cont4, direction, nh, cS, pg, vtx = make_batch(idx)
         ce = model.cond_embed(cS, pg)
-        return model.tracker.loss(layer, cont4, direction, ce, nh, vtx)
+        return model.tracker.loss(layer, cont4, direction, ce, nh, vtx, stop_pos_weight=stop_pw)
 
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
     Path(args.out).mkdir(parents=True, exist_ok=True)
