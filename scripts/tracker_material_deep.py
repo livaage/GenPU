@@ -60,7 +60,7 @@ def main():
         s = cls == c
         if s.sum() < 200:
             continue
-        print(f"  {CLASS_NAME.get(c,c):10s} {s.sum():8d} {nh[s].mean():11.2f} {np.median(nh[s]):7.0f} "
+        print(f"  {CLASS_NAME.get(c,str(c)):10s} {s.sum():8d} {nh[s].mean():11.2f} {np.median(nh[s]):7.0f} "
               f"{np.mean(nh[s]>=5):8.2f} {np.mean(nh[s]>=10):9.2f}")
 
     for label, cset in [("pions", {3, 4}), ("protons", {7}), ("muons", {13, 14})]:
