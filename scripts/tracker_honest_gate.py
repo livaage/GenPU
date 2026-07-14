@@ -41,13 +41,15 @@ def main():
     ap.add_argument("--batch", type=int, default=4096)
     ap.add_argument("--use_vertex", action="store_true")
     ap.add_argument("--truth_count", action="store_true", help="ablation: use truth n_hits (old gate)")
+    ap.add_argument("--count_no_d0", action="store_true", help="count head trained without d0")
     args = ap.parse_args()
     dev = "cuda" if torch.cuda.is_available() else "cpu"; torch.manual_seed(0); rng = np.random.default_rng(0)
 
     dsl = np.load(args.slice); norm = {"cont_mean": dsl["cont_mean"], "cont_std": dsl["cont_std"]}
     model = TrackerModel(norm, use_vertex=args.use_vertex).to(dev)
     model.load_state_dict(torch.load(args.ckpt, map_location=dev)["model"]); model.eval()
-    ch = CountHead().to(dev); ch.load_state_dict(torch.load(args.count_ckpt, map_location=dev)["model"]); ch.eval()
+    ch = CountHead(use_d0=not args.count_no_d0).to(dev)
+    ch.load_state_dict(torch.load(args.count_ckpt, map_location=dev)["model"]); ch.eval()
 
     d = np.load(Path(args.preproc_dir) / f"shard_{args.shard:04d}_stage2.npz")
     pf, aux, th, off, eid = (d["particle_features"], d["particle_aux"], d["tracker_hits_flat"],

@@ -22,8 +22,12 @@ def main():
     args = ap.parse_args()
     dev = "cuda" if torch.cuda.is_available() else "cpu"; rng = np.random.default_rng(0)
     d = np.load(args.slice)
-    cont, d0, nh, pdg = d["cont"], d["d0"], d["n_hits"], d["pdg"]
+    cont, pdg = d["cont"], d["pdg"]
+    nh = d["n_hits"] if "n_hits" in d else np.diff(d["offsets"])
+    has_d0 = "d0" in d
+    d0 = d["d0"] if has_d0 else np.zeros(len(nh), np.float32)
     cm, cs = d["cont_mean"], d["cont_std"]
+    print(f"slice has d0={has_d0}   PIONS n_hits median={np.median(nh[np.isin(pdg,[3,4])]):.0f} mean={nh[np.isin(pdg,[3,4])].mean():.2f}")
     S = len(nh); tr = rng.permutation(S)[: int(S * 0.9)]; te = np.setdiff1d(np.arange(S), tr)
     contS = torch.as_tensor((cont - cm) / cs, dtype=torch.float32, device=dev)
     pdgT = torch.as_tensor(pdg, dtype=torch.long, device=dev)
@@ -33,7 +37,8 @@ def main():
 
     def train(use_d0):
         m = CountHead(use_d0=use_d0).to(dev)
-        m.d0_mean[0] = float(d["d0_mean"][0]); m.d0_std[0] = float(d["d0_std"][0])
+        if has_d0:
+            m.d0_mean[0] = float(d["d0_mean"][0]); m.d0_std[0] = float(d["d0_std"][0])
         opt = torch.optim.Adam(m.parameters(), lr=1e-3)
         for step in range(1, args.steps + 1):
             idx = trT[torch.randint(len(trT), (args.batch,), device=dev)]
@@ -44,9 +49,13 @@ def main():
         return m, nll
 
     m0, nll0 = train(False)
-    m1, nll1 = train(True)
-    print("=" * 60); print("COUNT HEAD: held-out NLL"); print("=" * 60)
-    print(f"  without d0: {nll0:.4f}    with d0: {nll1:.4f}    improvement: {nll0-nll1:+.4f}")
+    if has_d0:
+        m1, nll1 = train(True)
+        print("=" * 60); print("COUNT HEAD: held-out NLL"); print("=" * 60)
+        print(f"  without d0: {nll0:.4f}    with d0: {nll1:.4f}    improvement: {nll0-nll1:+.4f}")
+    else:
+        m1, nll1 = m0, nll0
+        print(f"COUNT HEAD (no d0 in slice): held-out NLL {nll0:.4f}")
 
     real = nh[te]
     gen = m1.sample(contS[teT], pdgT[teT], d0T[teT]).cpu().numpy()
