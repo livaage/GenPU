@@ -1,8 +1,6 @@
-"""Conditioned count head: predict P(n_hits | particle) as a categorical, trained on the
-per-particle tracker response (ALL particles — debris included; this is a pileup generator,
-not a track reconstructor). Verify it reproduces BOTH the n_hits MARGINAL (the 43%-single-hit
-shape) and the weak-but-real CONDITIONING (n_hits vs incidence angle / eta / pT) we measured.
-No truth n_hits at generation."""
+"""Conditioned count head P(n_hits | particle [, d0]). Trains WITH and WITHOUT d0 to quantify
+what the impact parameter adds, and verifies the marginal + the n_hits-vs-(d0, pT, eta) dependence.
+Saves the with-d0 checkpoint for the honest full-pipeline gate."""
 from __future__ import annotations
 import argparse
 from pathlib import Path
@@ -13,86 +11,92 @@ import torch.nn.functional as F
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from genpu.conditioning import ParticleConditioning
-from genpu.detector_geometry import LAYER_MEANS, LAYER_STDS, N_LAYERS
 
-MAXB = 48   # n_hits bins: 1..47, 48+ overflow
+MAXB = 48
 
 
 class CountHead(nn.Module):
-    def __init__(self, embed_dim=64, hidden=128):
+    def __init__(self, embed_dim=64, hidden=128, use_d0=True):
         super().__init__()
+        self.use_d0 = use_d0
         self.cond = ParticleConditioning(embed_dim=embed_dim, use_pdg=True)
-        self.net = nn.Sequential(nn.Linear(embed_dim, hidden), nn.SiLU(),
+        self.net = nn.Sequential(nn.Linear(embed_dim + (1 if use_d0 else 0), hidden), nn.SiLU(),
                                  nn.Linear(hidden, hidden), nn.SiLU(), nn.Linear(hidden, MAXB))
+        self.register_buffer("d0_mean", torch.zeros(1)); self.register_buffer("d0_std", torch.ones(1))
 
-    def logits(self, cont_std, pdg):
-        return self.net(self.cond(cont_std, pdg))
+    def logits(self, cont_std, pdg, d0):
+        h = self.cond(cont_std, pdg)
+        if self.use_d0:
+            h = torch.cat([h, ((d0.abs() - self.d0_mean) / self.d0_std).unsqueeze(-1)], -1)
+        return self.net(h)
 
-    def loss(self, cont_std, pdg, n_hits):
-        tgt = torch.clamp(n_hits - 1, 0, MAXB - 1)
-        return F.cross_entropy(self.logits(cont_std, pdg), tgt)
+    def loss(self, cont_std, pdg, d0, n_hits):
+        return F.cross_entropy(self.logits(cont_std, pdg, d0), torch.clamp(n_hits - 1, 0, MAXB - 1))
 
     @torch.no_grad()
-    def sample(self, cont_std, pdg):
-        return torch.distributions.Categorical(logits=self.logits(cont_std, pdg)).sample() + 1
+    def sample(self, cont_std, pdg, d0):
+        return torch.distributions.Categorical(logits=self.logits(cont_std, pdg, d0)).sample() + 1
 
     @torch.no_grad()
-    def expected(self, cont_std, pdg):
-        p = torch.softmax(self.logits(cont_std, pdg), -1)
+    def expected(self, cont_std, pdg, d0):
+        p = torch.softmax(self.logits(cont_std, pdg, d0), -1)
         return (p * (torch.arange(MAXB, device=p.device) + 1)).sum(-1)
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--slice", default="/scratch/gpfs/IOJALVO/lv7805/genpu_data/tracker_slice/multispecies.npz")
-    ap.add_argument("--steps", type=int, default=8000)
-    ap.add_argument("--batch", type=int, default=4096)
+    ap.add_argument("--slice", default="/scratch/gpfs/IOJALVO/lv7805/genpu_data/tracker_slice/count.npz")
+    ap.add_argument("--out", default="/scratch/gpfs/IOJALVO/lv7805/genpu_data/checkpoints/tracker/count_head.pt")
+    ap.add_argument("--steps", type=int, default=10000)
+    ap.add_argument("--batch", type=int, default=8192)
     args = ap.parse_args()
     dev = "cuda" if torch.cuda.is_available() else "cpu"; rng = np.random.default_rng(0)
     d = np.load(args.slice)
-    cont, pdg, hits, off = d["cont"], d["pdg"], d["hits"], d["offsets"]
+    cont, d0, nh, pdg = d["cont"], d["d0"], d["n_hits"], d["pdg"]
     cm, cs = d["cont_mean"], d["cont_std"]
-    n_hits = np.clip(np.diff(off), 1, None).astype(np.int64)
-    S = cont.shape[0]
-    # incidence at first hit (from measured first-hit pos vs vertex), for the verification
-    lc = hits[:, 0].astype(int).clip(0, N_LAYERS - 1)
-    r = hits[:, 1] * LAYER_STDS[lc, 0] + LAYER_MEANS[lc, 0]
-    phi = hits[:, 2] * LAYER_STDS[lc, 1] + LAYER_MEANS[lc, 1]
-    z = hits[:, 3] * LAYER_STDS[lc, 2] + LAYER_MEANS[lc, 2]
-    fx, fy, fz = (r * np.cos(phi))[off[:-1]], (r * np.sin(phi))[off[:-1]], z[off[:-1]]
-    vx = cont[:, 5] * np.cos(0); vz = cont[:, 6]         # vr along x (phi arbitrary), vz
-    dvec = np.stack([fx - vx, fy, fz - vz], 1); dvec /= np.linalg.norm(dvec, axis=1, keepdims=True) + 1e-9
-    rhat = np.stack([fx, fy, np.zeros_like(fz)], 1); rhat /= np.linalg.norm(rhat, axis=1, keepdims=True) + 1e-9
-    inc = np.degrees(np.arccos(np.clip(np.abs((dvec * rhat).sum(1)), 0, 1)))
-
-    tr = rng.permutation(S)[: int(S * 0.9)]; te = np.setdiff1d(np.arange(S), tr)
+    S = len(nh); tr = rng.permutation(S)[: int(S * 0.9)]; te = np.setdiff1d(np.arange(S), tr)
     contS = torch.as_tensor((cont - cm) / cs, dtype=torch.float32, device=dev)
     pdgT = torch.as_tensor(pdg, dtype=torch.long, device=dev)
-    nhT = torch.as_tensor(n_hits, device=dev)
-    m = CountHead().to(dev); opt = torch.optim.Adam(m.parameters(), lr=1e-3)
-    trT = torch.as_tensor(tr, device=dev)
-    for step in range(1, args.steps + 1):
-        idx = trT[torch.randint(len(trT), (args.batch,), device=dev)]
-        loss = m.loss(contS[idx], pdgT[idx], nhT[idx])
-        opt.zero_grad(); loss.backward(); opt.step()
-        if step % 2000 == 0:
-            print(f"  step {step} loss {loss.item():.3f}", flush=True)
+    d0T = torch.as_tensor(d0, dtype=torch.float32, device=dev)
+    nhT = torch.as_tensor(np.clip(nh, 1, None), device=dev)
+    trT = torch.as_tensor(tr, device=dev); teT = torch.as_tensor(te, device=dev)
 
-    teT = torch.as_tensor(te, device=dev)
-    gen = m.sample(contS[teT], pdgT[teT]).cpu().numpy(); real = n_hits[te]
-    print("=" * 60); print("COUNT HEAD — marginal (real vs sampled)"); print("=" * 60)
+    def train(use_d0):
+        m = CountHead(use_d0=use_d0).to(dev)
+        m.d0_mean[0] = float(d["d0_mean"][0]); m.d0_std[0] = float(d["d0_std"][0])
+        opt = torch.optim.Adam(m.parameters(), lr=1e-3)
+        for step in range(1, args.steps + 1):
+            idx = trT[torch.randint(len(trT), (args.batch,), device=dev)]
+            loss = m.loss(contS[idx], pdgT[idx], d0T[idx], nhT[idx])
+            opt.zero_grad(); loss.backward(); opt.step()
+        with torch.no_grad():
+            nll = m.loss(contS[teT], pdgT[teT], d0T[teT], nhT[teT]).item()
+        return m, nll
+
+    m0, nll0 = train(False)
+    m1, nll1 = train(True)
+    print("=" * 60); print("COUNT HEAD: held-out NLL"); print("=" * 60)
+    print(f"  without d0: {nll0:.4f}    with d0: {nll1:.4f}    improvement: {nll0-nll1:+.4f}")
+
+    real = nh[te]
+    gen = m1.sample(contS[teT], pdgT[teT], d0T[teT]).cpu().numpy()
+    print("\nmarginal (real vs with-d0 sampled):")
     for k in [1, 2, 3, 5, 10]:
-        print(f"  frac[=={k}]: real {np.mean(real==k):.3f}  gen {np.mean(gen==k):.3f}   "
-              f"frac[>={k}]: real {np.mean(real>=k):.3f}  gen {np.mean(gen>=k):.3f}")
-    print(f"  mean: real {real.mean():.2f}  gen {gen.mean():.2f}   median: real {np.median(real):.0f} gen {np.median(gen):.0f}")
-    print("\nCONDITIONING captured? mean n_hits in bins (real vs count-head expected):")
-    exp = m.expected(contS[teT], pdgT[teT]).cpu().numpy()
-    for name, v in [("incidence", inc[te]), ("|eta|", np.abs(cont[te, 1])), ("log_pt", cont[te, 0])]:
-        q = np.quantile(v, [0, .25, .5, .75, 1.0]); rr, gg = [], []
+        print(f"  frac[=={k}]: real {np.mean(real==k):.3f} gen {np.mean(gen==k):.3f}   "
+              f"[>={k}]: real {np.mean(real>=k):.3f} gen {np.mean(gen>=k):.3f}")
+    print(f"  mean real {real.mean():.2f} gen {gen.mean():.2f}")
+    print("\nn_hits vs bins (real / pred-no-d0 / pred-with-d0):")
+    e0 = m0.expected(contS[teT], pdgT[teT], d0T[teT]).cpu().numpy()
+    e1 = m1.expected(contS[teT], pdgT[teT], d0T[teT]).cpu().numpy()
+    for name, v in [("|d0|", np.abs(d0[te])), ("log_pt", cont[te, 0]), ("|eta|", np.abs(cont[te, 1]))]:
+        q = np.quantile(v, [0, .25, .5, .75, 1.0]); rr, g0, g1 = [], [], []
         for i in range(4):
             b = (v >= q[i]) & (v <= q[i+1] if i == 3 else v < q[i+1])
-            rr.append(f"{real[b].mean():.1f}"); gg.append(f"{exp[b].mean():.1f}")
-        print(f"  {name:10s} real: {' '.join(rr)}   pred: {' '.join(gg)}")
+            rr.append(f"{real[b].mean():.1f}"); g0.append(f"{e0[b].mean():.1f}"); g1.append(f"{e1[b].mean():.1f}")
+        print(f"  {name:8s} real:{' '.join(rr)}  noD0:{' '.join(g0)}  withD0:{' '.join(g1)}")
+    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+    torch.save({"model": m1.state_dict()}, args.out)
+    print(f"\nsaved with-d0 count head -> {args.out}")
 
 
 if __name__ == "__main__":
