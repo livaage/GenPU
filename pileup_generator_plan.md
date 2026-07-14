@@ -462,3 +462,16 @@ analytic decay sampler. Re-scope M0 decay accordingly.
   cluster-size acceptance; fallback is local-neighborhood density conditioning per particle.
 - **Exposure bias** largely designed out (Pythia input at train and generation time); re-enters
   only if the v2 track->calo edge is added — use conditioning augmentation there.
+
+## HONEST tracker gate (count head, no truth n_hits) — and a data bug found
+
+- **DATA BUG (found via honest gate):** source diagnostics joined particles<->tracker_hits by
+  ROW INDEX; tables aren't event-aligned -> must join by event_id (see memory
+  source_event_join_bug). Invalidated the source-based v2/count-slice analysis (pions looked
+  median-2/stochastic). CORRECT stage2 pions are median 10, long, length strongly ~ p_T.
+- **Count head** P(n_hits|particle) on CORRECT (stage2) data: NLL 1.34, reproduces marginal
+  (frac==1 0.443/0.446) + strong p_T dependence (1.0->10.1). d0 redundant (no NLL gain).
+- **Honest event gate** (count head samples n_hits, NO truth counts): AUC **0.806** vs
+  truth-count crutch **0.757** — only +0.05 cost to self-generate counts. gen n_hits mean 9.61
+  (real 9.78), median 10 both. Residual: slightly too few hits/pion (9.45 vs 9.96). => honest
+  tracker pileup generator validated (charged pions). Next: broaden to all species / full event.
