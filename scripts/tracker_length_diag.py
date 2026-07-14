@@ -20,7 +20,7 @@ def main():
     d = np.load(args.slice)
     cont, hits, off = d["cont"], d["hits"], d["offsets"]
     n_hits = np.diff(off).astype(int)
-    pt = np.exp(cont[:, 0]); aeta = np.abs(cont[:, 1])
+    pt = np.exp(cont[:, 0]); aeta = np.abs(cont[:, 1]); vr = cont[:, 5]; avz = np.abs(cont[:, 6])
     lc = hits[:, 0].astype(int).clip(0, N_LAYERS - 1)
     r_phys = hits[:, 1] * LAYER_STDS[lc, 0] + LAYER_MEANS[lc, 0]
     z_phys = hits[:, 3] * LAYER_STDS[lc, 2] + LAYER_MEANS[lc, 2]
@@ -35,17 +35,22 @@ def main():
     print(f"p_T: median={np.median(pt):.2f} GeV  p5={np.percentile(pt,5):.2f} p95={np.percentile(pt,95):.2f}")
     print(f"detector reach: r99.5={R_MAX:.0f}  |z|99.5={Z_MAX:.0f}")
 
-    print("\n-- n_hits vs kinematics (mean n_hits in bins) --")
-    for name, v in [("p_T", pt), ("|eta|", aeta)]:
+    print("\n-- n_hits vs kinematics + VERTEX (mean n_hits in bins) --")
+    for name, v in [("p_T", pt), ("|eta|", aeta), ("vr", vr), ("|vz|", avz)]:
         q = np.quantile(v, [0, .25, .5, .75, 1.0])
         row = []
         for i in range(4):
             m = (v >= q[i]) & (v <= q[i + 1] if i == 3 else v < q[i + 1])
-            row.append(f"[{q[i]:.2f}-{q[i+1]:.2f}]:{n_hits[m].mean():.1f}")
+            row.append(f"[{q[i]:.1f}-{q[i+1]:.1f}]:{n_hits[m].mean():.1f}")
         print(f"  {name:6s} quartiles -> " + "  ".join(row))
-    # correlation
     print(f"  corr(n_hits, log p_T)={np.corrcoef(n_hits, np.log(pt))[0,1]:+.3f}   "
-          f"corr(n_hits, |eta|)={np.corrcoef(n_hits, aeta)[0,1]:+.3f}")
+          f"corr(n_hits, |eta|)={np.corrcoef(n_hits, aeta)[0,1]:+.3f}   "
+          f"corr(n_hits, vr)={np.corrcoef(n_hits, vr)[0,1]:+.3f}   "
+          f"corr(n_hits, |vz|)={np.corrcoef(n_hits, avz)[0,1]:+.3f}")
+    prim = vr < 5
+    print(f"  PRIMARIES (vr<5): {np.mean(prim):.2f} of tracks, n_hits mean={n_hits[prim].mean():.1f} "
+          f"median={np.median(n_hits[prim]):.0f}   SECONDARIES (vr>=5): n_hits mean={n_hits[~prim].mean():.1f} "
+          f"median={np.median(n_hits[~prim]):.0f}")
 
     print("\n-- WHERE tracks stop (last-hit radius) --")
     def stopinfo(mask, tag):
