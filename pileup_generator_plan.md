@@ -491,3 +491,18 @@ analytic decay sampler. Re-scope M0 decay accordingly.
 - **Honest tracker gate stays 0.806** (count_head_ms, consistent norm). The 0.92 with the
   count_stage2 head was a norm-mismatch artifact (trained on count_stage2 norm, gate fed
   multispecies norm) - not a real result. count_head_ms.pt is the valid count head.
+
+## MILESTONE — honest full-event tracker pileup generator
+
+- Two-population understanding (correct data): primaries 17% long coherent (median 11), secondaries
+  83% short; secondaries TYPE-split (neutral photon/neutron = 1 hit; charged secondaries = real
+  short tracks). Charge drives track-vs-fragment; vertex drives length. Primary/secondary AR split
+  did NOT clearly help the response (long-primary coherence is the known-hard core; accepted).
+- **Full-event honest gate (count head + AR, NO truth n_hits, ALL species incl class-0 fragments):
+  AUC 0.770.** Count matched (median 2, mean 4.53 both). Progression: pions 0.806 -> charged 0.849
+  -> +named neutrals 0.865 -> full event 0.770 (fragments dominate, trivial to match). No dedicated
+  neutral model needed - multispecies AR + count head already trained on the fragment population.
+  Residuals: z_std (0.22 sigma, gen slightly wide) + hits_per_particle (0.20, gen slightly under).
+- This is the deliverable for the tracker: complete self-driven per-event response. Remaining
+  frontier = the MATERIAL CASCADE (generate secondaries from primaries) to run from Pythia PRIMARIES
+  only (currently conditions on the truth particle list incl. secondaries).
