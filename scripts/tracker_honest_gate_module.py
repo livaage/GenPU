@@ -1,16 +1,20 @@
-"""HONEST tracker event gate: the full self-driven pipeline with NO truth n_hits.
-For each real particle -> count head samples n_hits (from conditioning + geometric d0) ->
-AR generates that many hits -> superpose per event -> two-sample gate vs real. This is the
-real 'how well do we match pileup' number; the old gate used truth counts as a crutch."""
+"""HONEST tracker event gate for the v3 SURFACE-LOCAL tracker (tracker_module_ar).
+
+Identical protocol to tracker_honest_gate.py (same count head, same real-event features, same
+MLP two-sample classifier) — the ONLY change is the generator: v3 emits global (x,y,z)+module,
+so we adapt to the gate's (layer, r, z) features via  layer=module->layer_class,  r=hypot(x,y).
+This keeps the comparison against the v1 0.77 baseline apples-to-apples (only the tracker differs).
+"""
 from __future__ import annotations
-import argparse, json
+import argparse
 from pathlib import Path
 import numpy as np
 import torch
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-from genpu.models.tracker_model import TrackerModel
+from genpu.models.tracker_module_model import TrackerModuleModel
 from genpu.models.count_head import CountHead
+from genpu.module_geometry import ModuleGeometry
 
 PF_LOGPT, PF_ETA, PF_PHI, PF_PDG, PF_CHARGE, PF_MASS = range(6)
 AUX_PRIMARY, AUX_PARENT, AUX_VX, AUX_VY, AUX_VZ, AUX_ENERGY = range(6)
@@ -31,26 +35,27 @@ def rank_auc(s, y):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ckpt", required=True, help="AR tracker checkpoint")
-    ap.add_argument("--count_ckpt", required=True, help="count head checkpoint")
+    ap.add_argument("--ckpt", required=True, help="v3 surface tracker checkpoint")
+    ap.add_argument("--count_ckpt", required=True, help="use the *_selfnorm count head (normalizes cont itself)")
+    ap.add_argument("--module_geometry", default="/scratch/gpfs/IOJALVO/lv7805/genpu_data/module_geometry.npz")
     ap.add_argument("--shard", type=int, default=0)
     ap.add_argument("--preproc_dir", default="/scratch/gpfs/IOJALVO/lv7805/genpu_data/preprocessed")
-    ap.add_argument("--slice", default="/scratch/gpfs/IOJALVO/lv7805/genpu_data/tracker_slice/multispecies.npz")
+    ap.add_argument("--slice", default="/scratch/gpfs/IOJALVO/lv7805/genpu_data/tracker_slice/surface_pion.npz")
     ap.add_argument("--pdg_class", type=int, nargs="+", default=[3, 4])
     ap.add_argument("--max_hits", type=int, default=32)
     ap.add_argument("--batch", type=int, default=4096)
-    ap.add_argument("--use_vertex", action="store_true")
-    ap.add_argument("--use_mom_feat", action="store_true", help="model uses helix-z momentum-estimate feature")
-    ap.add_argument("--truth_count", action="store_true", help="ablation: use truth n_hits (old gate)")
-    ap.add_argument("--count_no_d0", action="store_true", help="count head trained without d0")
+    ap.add_argument("--truth_count", action="store_true")
+    ap.add_argument("--count_no_d0", action="store_true")
     args = ap.parse_args()
     dev = "cuda" if torch.cuda.is_available() else "cpu"; torch.manual_seed(0); rng = np.random.default_rng(0)
 
     dsl = np.load(args.slice); norm = {"cont_mean": dsl["cont_mean"], "cont_std": dsl["cont_std"]}
-    model = TrackerModel(norm, use_vertex=args.use_vertex, use_mom_feat=args.use_mom_feat).to(dev)
+    model = TrackerModuleModel(norm, module_geometry_path=args.module_geometry, max_hits=args.max_hits).to(dev)
     model.load_state_dict(torch.load(args.ckpt, map_location=dev)["model"]); model.eval()
     ch = CountHead(use_d0=not args.count_no_d0).to(dev)
     ch.load_state_dict(torch.load(args.count_ckpt, map_location=dev)["model"]); ch.eval()
+    mg = ModuleGeometry(args.module_geometry)
+    layer_of_module = torch.as_tensor(mg.layer_class, dtype=torch.long, device=dev)
 
     d = np.load(Path(args.preproc_dir) / f"shard_{args.shard:04d}_stage2.npz")
     pf, aux, th, off, eid = (d["particle_features"], d["particle_aux"], d["tracker_hits_flat"],
@@ -63,16 +68,12 @@ def main():
     phi = pf[sel, PF_PHI]; d0 = (aux[sel, AUX_VX] * np.sin(phi) - aux[sel, AUX_VY] * np.cos(phi)).astype(np.float32)
     pdg = pf[sel, PF_PDG].astype(np.int64); n_true = np.clip(ntrk[sel], 1, args.max_hits).astype(np.int64)
 
-    contS = torch.as_tensor((cont - norm["cont_mean"]) / norm["cont_std"], device=dev)
+    contS = torch.as_tensor((cont - norm["cont_mean"]) / norm["cont_std"], device=dev)   # tracker norm
+    contP = torch.as_tensor(cont, dtype=torch.float32, device=dev)                       # RAW for count head
     pdgT = torch.as_tensor(pdg, device=dev); d0T = torch.as_tensor(d0, device=dev)
-    vtxT = torch.as_tensor(cont[:, [5, 6]], dtype=torch.float32, device=dev)
-    helixT = (TrackerModel.helix_params_from_cont(torch.as_tensor(cont, dtype=torch.float32, device=dev))
-              if args.use_mom_feat else None)
     with torch.no_grad():
-        if args.truth_count:
-            n_gen = torch.as_tensor(n_true, device=dev)
-        else:
-            n_gen = ch.sample(contS, pdgT, d0T).clamp(1, args.max_hits)     # emergent, honest count
+        n_gen = (torch.as_tensor(n_true, device=dev) if args.truth_count
+                 else ch.sample_raw(contP, pdgT, d0T).clamp(1, args.max_hits))   # self-normalizing count head
     n_gen_np = n_gen.cpu().numpy()
 
     gl, gr, gz, gs = [], [], [], []
@@ -80,13 +81,13 @@ def main():
         e = min(s + args.batch, len(sel))
         with torch.no_grad():
             ce = model.cond_embed(contS[s:e], pdgT[s:e])
-            vtx = vtxT[s:e] if args.use_vertex else None
-            hlx = helixT[s:e] if args.use_mom_feat else None
-            hits, layers = model.tracker.generate(ce, n_gen[s:e], vertex_pos=vtx, helix_params=hlx)
-        hits = hits.cpu().numpy(); layers = layers.cpu().numpy()
+            phys, gmod = model.tracker.generate(ce, n_gen[s:e])       # phys (B,N,4) [x,y,z,time]
+            layers = layer_of_module[gmod]                            # module -> layer_class
+        phys = phys.cpu().numpy(); layers = layers.cpu().numpy()
+        r = np.hypot(phys[:, :, 0], phys[:, :, 1]); z = phys[:, :, 2]
         for j in range(e - s):
             k = int(n_gen_np[s + j])
-            gl.append(layers[j, :k]); gr.append(hits[j, :k, TH_R - 1]); gz.append(hits[j, :k, TH_Z - 1]); gs.append(np.full(k, s + j))
+            gl.append(layers[j, :k]); gr.append(r[j, :k]); gz.append(z[j, :k]); gs.append(np.full(k, s + j))
     gl = np.concatenate(gl); gr = np.concatenate(gr); gz = np.concatenate(gz); gs = np.concatenate(gs)
 
     ev_of = eid[sel]; uev = np.unique(ev_of); Xr, Xg = [], []
@@ -112,8 +113,8 @@ def main():
     with torch.no_grad():
         auc = rank_auc(clf(Xt[torch.as_tensor(te, device=dev)]).squeeze(-1).cpu().numpy(), y[te])
     names = ["n_hits", "layer_mean", "layer_std", "r_mean", "r_std", "z_std", "frac_inner", "hits_per_pion"]
-    mode = "TRUTH-count (crutch)" if args.truth_count else "HONEST (count head, no truth n_hits)"
-    print("=" * 62); print(f"TRACKER {mode}  pdg={args.pdg_class}"); print("=" * 62)
+    mode = "TRUTH-count" if args.truth_count else "HONEST (count head)"
+    print("=" * 62); print(f"v3 SURFACE TRACKER {mode}  pdg={args.pdg_class}"); print("=" * 62)
     print(f"count: real n_hits mean={n_true.mean():.2f} median={np.median(n_true):.0f}   "
           f"gen mean={n_gen_np.mean():.2f} median={np.median(n_gen_np):.0f}")
     print(f"events: {len(uev)}   test AUC = {auc:.4f}   (0.5 = indistinguishable)")

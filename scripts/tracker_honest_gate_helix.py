@@ -1,15 +1,15 @@
-"""HONEST tracker event gate: the full self-driven pipeline with NO truth n_hits.
-For each real particle -> count head samples n_hits (from conditioning + geometric d0) ->
-AR generates that many hits -> superpose per event -> two-sample gate vs real. This is the
-real 'how well do we match pileup' number; the old gate used truth counts as a crutch."""
+"""HONEST tracker event gate for the v4 HELIX-anchored model. Same protocol/features as
+tracker_honest_gate_module.py; the generator emits particle-frame (x,y,z) = helix_ref + deviation,
+and r=hypot(x,y), z, layer are frame-invariant so the gate is unchanged. helix_ref computed per
+particle from its momentum + rotated vertex (self-normalizing count head)."""
 from __future__ import annotations
-import argparse, json
+import argparse
 from pathlib import Path
 import numpy as np
 import torch
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-from genpu.models.tracker_model import TrackerModel
+from genpu.models.tracker_helix_model import TrackerHelixModel
 from genpu.models.count_head import CountHead
 
 PF_LOGPT, PF_ETA, PF_PHI, PF_PDG, PF_CHARGE, PF_MASS = range(6)
@@ -31,25 +31,22 @@ def rank_auc(s, y):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ckpt", required=True, help="AR tracker checkpoint")
-    ap.add_argument("--count_ckpt", required=True, help="count head checkpoint")
+    ap.add_argument("--ckpt", required=True)
+    ap.add_argument("--count_ckpt", required=True)
+    ap.add_argument("--slice", required=True, help="helix slice (for cont norm)")
     ap.add_argument("--shard", type=int, default=0)
     ap.add_argument("--preproc_dir", default="/scratch/gpfs/IOJALVO/lv7805/genpu_data/preprocessed")
-    ap.add_argument("--slice", default="/scratch/gpfs/IOJALVO/lv7805/genpu_data/tracker_slice/multispecies.npz")
     ap.add_argument("--pdg_class", type=int, nargs="+", default=[3, 4])
     ap.add_argument("--max_hits", type=int, default=32)
     ap.add_argument("--batch", type=int, default=4096)
-    ap.add_argument("--use_vertex", action="store_true")
-    ap.add_argument("--use_mom_feat", action="store_true", help="model uses helix-z momentum-estimate feature")
-    ap.add_argument("--truth_count", action="store_true", help="ablation: use truth n_hits (old gate)")
-    ap.add_argument("--count_no_d0", action="store_true", help="count head trained without d0")
+    ap.add_argument("--truth_count", action="store_true")
     args = ap.parse_args()
     dev = "cuda" if torch.cuda.is_available() else "cpu"; torch.manual_seed(0); rng = np.random.default_rng(0)
 
     dsl = np.load(args.slice); norm = {"cont_mean": dsl["cont_mean"], "cont_std": dsl["cont_std"]}
-    model = TrackerModel(norm, use_vertex=args.use_vertex, use_mom_feat=args.use_mom_feat).to(dev)
+    model = TrackerHelixModel(norm, max_hits=args.max_hits).to(dev)
     model.load_state_dict(torch.load(args.ckpt, map_location=dev)["model"]); model.eval()
-    ch = CountHead(use_d0=not args.count_no_d0).to(dev)
+    ch = CountHead(use_d0=True).to(dev)
     ch.load_state_dict(torch.load(args.count_ckpt, map_location=dev)["model"]); ch.eval()
 
     d = np.load(Path(args.preproc_dir) / f"shard_{args.shard:04d}_stage2.npz")
@@ -59,20 +56,20 @@ def main():
     sel = np.where(np.isin(pf[:, PF_PDG], args.pdg_class) & (ntrk >= 1))[0]
     vr = np.hypot(aux[sel, AUX_VX], aux[sel, AUX_VY]); logE = np.log(np.clip(aux[sel, AUX_ENERGY], 1e-6, None))
     cont = np.stack([pf[sel, PF_LOGPT], pf[sel, PF_ETA], logE, pf[sel, PF_CHARGE],
-                     pf[sel, PF_MASS], vr, aux[sel, AUX_VZ]], axis=1).astype(np.float32)
-    phi = pf[sel, PF_PHI]; d0 = (aux[sel, AUX_VX] * np.sin(phi) - aux[sel, AUX_VY] * np.cos(phi)).astype(np.float32)
+                     pf[sel, PF_MASS], vr, aux[sel, AUX_VZ]], 1).astype(np.float32)
+    phi = pf[sel, PF_PHI]
+    vxr = (aux[sel, AUX_VX] * np.cos(phi) + aux[sel, AUX_VY] * np.sin(phi)).astype(np.float32)
+    vyr = (-aux[sel, AUX_VX] * np.sin(phi) + aux[sel, AUX_VY] * np.cos(phi)).astype(np.float32)
+    d0 = (aux[sel, AUX_VX] * np.sin(phi) - aux[sel, AUX_VY] * np.cos(phi)).astype(np.float32)
     pdg = pf[sel, PF_PDG].astype(np.int64); n_true = np.clip(ntrk[sel], 1, args.max_hits).astype(np.int64)
 
     contS = torch.as_tensor((cont - norm["cont_mean"]) / norm["cont_std"], device=dev)
+    contP = torch.as_tensor(cont, dtype=torch.float32, device=dev)
     pdgT = torch.as_tensor(pdg, device=dev); d0T = torch.as_tensor(d0, device=dev)
-    vtxT = torch.as_tensor(cont[:, [5, 6]], dtype=torch.float32, device=dev)
-    helixT = (TrackerModel.helix_params_from_cont(torch.as_tensor(cont, dtype=torch.float32, device=dev))
-              if args.use_mom_feat else None)
+    href_all = TrackerHelixModel.helix_ref(cont, vxr, vyr).astype(np.float32)      # (S,48,3)
     with torch.no_grad():
-        if args.truth_count:
-            n_gen = torch.as_tensor(n_true, device=dev)
-        else:
-            n_gen = ch.sample(contS, pdgT, d0T).clamp(1, args.max_hits)     # emergent, honest count
+        n_gen = (torch.as_tensor(n_true, device=dev) if args.truth_count
+                 else ch.sample_raw(contP, pdgT, d0T).clamp(1, args.max_hits))
     n_gen_np = n_gen.cpu().numpy()
 
     gl, gr, gz, gs = [], [], [], []
@@ -80,13 +77,13 @@ def main():
         e = min(s + args.batch, len(sel))
         with torch.no_grad():
             ce = model.cond_embed(contS[s:e], pdgT[s:e])
-            vtx = vtxT[s:e] if args.use_vertex else None
-            hlx = helixT[s:e] if args.use_mom_feat else None
-            hits, layers = model.tracker.generate(ce, n_gen[s:e], vertex_pos=vtx, helix_params=hlx)
+            hr = torch.as_tensor(href_all[s:e], device=dev)
+            hits, layers = model.tracker.generate(ce, n_gen[s:e], hr)   # hits (B,N,4) [x,y,z,time]
         hits = hits.cpu().numpy(); layers = layers.cpu().numpy()
+        r = np.hypot(hits[:, :, 0], hits[:, :, 1]); z = hits[:, :, 2]
         for j in range(e - s):
             k = int(n_gen_np[s + j])
-            gl.append(layers[j, :k]); gr.append(hits[j, :k, TH_R - 1]); gz.append(hits[j, :k, TH_Z - 1]); gs.append(np.full(k, s + j))
+            gl.append(layers[j, :k]); gr.append(r[j, :k]); gz.append(z[j, :k]); gs.append(np.full(k, s + j))
     gl = np.concatenate(gl); gr = np.concatenate(gr); gz = np.concatenate(gz); gs = np.concatenate(gs)
 
     ev_of = eid[sel]; uev = np.unique(ev_of); Xr, Xg = [], []
@@ -100,7 +97,6 @@ def main():
         gmask = np.isin(gs, pm)
         Xg.append(event_features(gl[gmask], gr[gmask], gz[gmask], n_src))
     Xr, Xg = np.array(Xr), np.array(Xg)
-
     X = np.concatenate([Xr, Xg]); y = np.concatenate([np.zeros(len(Xr)), np.ones(len(Xg))])
     Xs = (X - X.mean(0)) / (X.std(0) + 1e-6)
     perm = rng.permutation(len(X)); ntr = len(X) // 2; tr, te = perm[:ntr], perm[ntr:]
@@ -112,14 +108,11 @@ def main():
     with torch.no_grad():
         auc = rank_auc(clf(Xt[torch.as_tensor(te, device=dev)]).squeeze(-1).cpu().numpy(), y[te])
     names = ["n_hits", "layer_mean", "layer_std", "r_mean", "r_std", "z_std", "frac_inner", "hits_per_pion"]
-    mode = "TRUTH-count (crutch)" if args.truth_count else "HONEST (count head, no truth n_hits)"
-    print("=" * 62); print(f"TRACKER {mode}  pdg={args.pdg_class}"); print("=" * 62)
-    print(f"count: real n_hits mean={n_true.mean():.2f} median={np.median(n_true):.0f}   "
-          f"gen mean={n_gen_np.mean():.2f} median={np.median(n_gen_np):.0f}")
-    print(f"events: {len(uev)}   test AUC = {auc:.4f}   (0.5 = indistinguishable)")
+    print("=" * 62); print(f"v4 HELIX TRACKER {'TRUTH' if args.truth_count else 'HONEST'}  pdg={args.pdg_class}"); print("=" * 62)
+    print(f"count: real median={np.median(n_true):.0f}  gen median={np.median(n_gen_np):.0f}")
+    print(f"events: {len(uev)}   test AUC = {auc:.4f}")
     for j, nm in enumerate(names):
-        dstd = abs(Xr[:, j].mean() - Xg[:, j].mean()) / (X[:, j].std() + 1e-9)
-        print(f"  {nm:14s} real {Xr[:,j].mean():10.3f}  gen {Xg[:,j].mean():10.3f}  |d|/s {dstd:.2f}")
+        print(f"  {nm:14s} real {Xr[:,j].mean():10.3f}  gen {Xg[:,j].mean():10.3f}  |d|/s {abs(Xr[:,j].mean()-Xg[:,j].mean())/(X[:,j].std()+1e-9):.2f}")
 
 
 if __name__ == "__main__":

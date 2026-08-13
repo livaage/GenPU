@@ -26,6 +26,10 @@ def main():
     ap.add_argument("--use_vertex", action="store_true", help="seed AR with production vertex (vr,vz)")
     ap.add_argument("--min_hits_train", type=int, default=1, help="train only on tracks with >= this many hits")
     ap.add_argument("--use_helix", action="store_true", help="reparametrize z as deviation from analytic trajectory")
+    ap.add_argument("--use_mom_feat", action="store_true", help="feed helix-expected z (momentum estimate) as an extra INPUT feature (output unchanged)")
+    ap.add_argument("--seed_weight", type=float, default=1.0, help="up-weight the vertex-anchored first-hit loss")
+    ap.add_argument("--jitter", type=int, default=0, help="input-jitter (scheduled-sampling proxy): +-N bins on fed-back history to fight outward drift")
+    ap.add_argument("--init_from", default="", help="warm-start model weights from a checkpoint (strict=False)")
     ap.add_argument("--no_wandb", action="store_true")
     args = ap.parse_args()
 
@@ -78,7 +82,11 @@ def main():
         print(f"helix: z_dev_std={z_dev_std:.2f} (real z_r_resid scale)")
 
     model = TrackerModel(norm, max_hits=M, use_vertex=args.use_vertex,
-                         use_helix=args.use_helix, z_dev_std=z_dev_std).to(dev)
+                         use_helix=args.use_helix, use_mom_feat=args.use_mom_feat, z_dev_std=z_dev_std).to(dev)
+    if args.init_from:
+        sd = torch.load(args.init_from, map_location=dev)["model"]
+        miss = model.load_state_dict(sd, strict=False)
+        print(f"init_from {args.init_from}: missing={list(miss.missing_keys)} unexpected={list(miss.unexpected_keys)}", flush=True)
 
     def make_batch(idx):
         """Pad a set of particles into (B,M) sequences (first M hits, inner->outer)."""
@@ -105,8 +113,9 @@ def main():
     def step_loss(idx):
         layer, cont4, mask, nh, cS, pg, vtx, contP = make_batch(idx)
         ce = model.cond_embed(cS, pg)
-        hlx = TrackerModel.helix_params_from_cont(contP) if args.use_helix else None
-        return model.tracker.loss(layer, cont4, ce, mask, nh, vertex_pos=vtx, helix_params=hlx)
+        hlx = TrackerModel.helix_params_from_cont(contP) if (args.use_helix or args.use_mom_feat) else None
+        return model.tracker.loss(layer, cont4, ce, mask, nh, vertex_pos=vtx, helix_params=hlx,
+                                  seed_weight=args.seed_weight, jitter=args.jitter)
 
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
     Path(args.out).mkdir(parents=True, exist_ok=True)

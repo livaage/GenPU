@@ -65,6 +65,7 @@ class TrackerARModel(nn.Module):
         dropout: float = 0.0,
         use_vertex: bool = False,
         use_helix: bool = False,
+        use_mom_feat: bool = False,
         z_dev_std: float = 1.0,
     ):
         super().__init__()
@@ -81,6 +82,12 @@ class TrackerARModel(nn.Module):
         # construction -> the per-track z-vs-r coherence (z_r_resid) is enforced, not left
         # to the AR to discover. helix_params = (B,3) physical [vr, vz, sinh(eta)].
         self.use_helix = use_helix
+        # use_mom_feat: feed the helix-expected z at each hit's radius, z_guide(r) = vz +
+        # (r-vr)*sinh(eta), as an EXTRA INPUT feature (the momentum estimate from the initial
+        # momentum+vertex) — the kinematic anchor the paper (arXiv:2512.24254) gets from carrying
+        # per-hit momentum. Output representation is UNCHANGED (no residual reparametrization); the
+        # model just also sees where the trajectory should be at each step, to curb the outward drift.
+        self.use_mom_feat = use_mom_feat
 
         # Token embeddings for each feature
         # Layer: 48 classes + 1 BOS token
@@ -98,12 +105,19 @@ class TrackerARModel(nn.Module):
         # ABSOLUTE spatial-position input: per-layer-standardized residuals hide the
         # trajectory, so also feed each hit's physical (r, phi, z) — [r/1e3, sin phi,
         # cos phi, z/3e3] — letting causal attention reconstruct the track's helix.
-        self.abspos_proj = nn.Linear(4, model_dim)
+        self.abspos_proj = nn.Linear(5 if use_mom_feat else 4, model_dim)
 
         # Learned vertex/start token (only when use_vertex); combined with the vertex's
         # absolute position via abspos_proj to seed the sequence.
         if use_vertex:
             self.start_token = nn.Parameter(torch.zeros(model_dim))
+            # Direct learnable vertex-radius -> per-layer logit prior. Gives the model an
+            # easy pathway from the production (vr,vz) to WHICH layers are physically
+            # reachable, so the seed/early hits respect the birth radius instead of
+            # defaulting to the innermost (layer-7) marginal, and later hits are discouraged
+            # from drifting to unreachable radii. Added to layer logits at every position.
+            self.vertex_layer_bias = nn.Sequential(
+                nn.Linear(2, model_dim), nn.SiLU(), nn.Linear(model_dim, N_LAYERS))
 
         # Particle conditioning
         self.cond_proj = nn.Sequential(
@@ -202,9 +216,17 @@ class TrackerARModel(nn.Module):
             z_phys = self._z_guide(r_phys, helix_params) + self._spatial_centers[z_bins] * self.z_dev_std
         else:
             z_phys = self._spatial_centers[z_bins] * ls[..., 2] + lm[..., 2]
-        abspos = torch.stack([r_phys / 1000.0, torch.sin(phi_phys),
-                              torch.cos(phi_phys), z_phys / 3000.0], dim=-1)
+        cols = [r_phys / 1000.0, torch.sin(phi_phys), torch.cos(phi_phys), z_phys / 3000.0]
+        if self.use_mom_feat:
+            # momentum-estimate feature: helix-expected z at this hit's radius
+            cols.append(self._z_guide(r_phys, helix_params) / 3000.0)
+        abspos = torch.stack(cols, dim=-1)
         return tok + self.abspos_proj(abspos)
+
+    def _vtx_layer_bias(self, vertex_pos: torch.Tensor) -> torch.Tensor:
+        """(B,2) physical [vr,vz] -> (B,N_LAYERS) additive per-layer logit prior."""
+        feat = torch.stack([vertex_pos[:, 0] / 1000.0, vertex_pos[:, 1] / 3000.0], dim=-1)
+        return self.vertex_layer_bias(feat)
 
     def _vertex_embed(self, vertex_pos: torch.Tensor) -> torch.Tensor:
         """Embed the production vertex as the sequence seed. vertex_pos: (B,2) physical
@@ -212,7 +234,10 @@ class TrackerARModel(nn.Module):
         deficit), which is what matters."""
         vr, vz = vertex_pos[:, 0], vertex_pos[:, 1]
         zero = torch.zeros_like(vr)
-        abspos = torch.stack([vr / 1000.0, zero, zero, vz / 3000.0], dim=-1)
+        cols = [vr / 1000.0, zero, zero, vz / 3000.0]
+        if self.use_mom_feat:
+            cols.append(vz / 3000.0)     # z_guide at r=vr is exactly vz
+        abspos = torch.stack(cols, dim=-1)
         return self.start_token.unsqueeze(0) + self.abspos_proj(abspos)  # (B, D)
 
     def forward(
@@ -223,6 +248,7 @@ class TrackerARModel(nn.Module):
         mask: torch.Tensor,
         vertex_pos: torch.Tensor | None = None,
         helix_params: torch.Tensor | None = None,
+        jitter: int = 0,
     ) -> dict[str, torch.Tensor]:
         """Teacher-forced forward pass.
 
@@ -240,7 +266,17 @@ class TrackerARModel(nn.Module):
         device = layer_classes.device
 
         r_bins, phi_bins, z_bins, time_bins = self._tokenize_continuous(continuous, layer_classes, helix_params)
-        h = self._embed_hits(layer_classes, r_bins, phi_bins, z_bins, time_bins, helix_params)
+        # Input jitter (scheduled-sampling proxy): perturb the spatial bins the model CONDITIONS
+        # on (the fed-back history), keeping targets clean -> the model learns to predict the true
+        # next hit from imperfect history, so it stops compounding errors outward (the drift that
+        # inflates r_p90/absz_p90). Applied only in training; generation/eval are untouched.
+        if jitter > 0 and self.training:
+            def _j(b):
+                return (b + torch.randint(-jitter, jitter + 1, b.shape, device=device)).clamp(0, N_BINS_SPATIAL - 1)
+            r_in, phi_in, z_in = _j(r_bins), _j(phi_bins), _j(z_bins)
+        else:
+            r_in, phi_in, z_in = r_bins, phi_bins, z_bins
+        h = self._embed_hits(layer_classes, r_in, phi_in, z_in, time_bins, helix_params)
 
         if self.use_vertex:
             v = self._vertex_embed(vertex_pos).unsqueeze(1)          # (B,1,D)
@@ -258,8 +294,16 @@ class TrackerARModel(nn.Module):
             tgt_key_padding_mask=~key_mask,
         )
 
+        layer_logits = self.layer_head(h)
+        if self.use_vertex and vertex_pos is not None:
+            # anchor ONLY the seed (output position 0 predicts the innermost hit_0). A
+            # position-independent bias would also perturb later hits — which need prior-hit
+            # context, not vr — so the optimizer keeps it weak and the seed never moves.
+            seed_bias = torch.zeros_like(layer_logits)
+            seed_bias[:, 0] = self._vtx_layer_bias(vertex_pos)
+            layer_logits = layer_logits + seed_bias
         return {
-            "layer_logits": self.layer_head(h),
+            "layer_logits": layer_logits,
             "r_logits": self.r_head(h),
             "phi_logits": self.phi_head(h),
             "z_logits": self.z_head(h),
@@ -275,16 +319,19 @@ class TrackerARModel(nn.Module):
         n_hits: torch.Tensor,
         vertex_pos: torch.Tensor | None = None,
         helix_params: torch.Tensor | None = None,
+        seed_weight: float = 1.0,
+        jitter: int = 0,
     ) -> dict[str, torch.Tensor]:
         """Compute AR loss: CE for all token types.
 
         With use_vertex, output position i predicts hit i (vertex is position 0);
-        otherwise legacy shift-by-1.
+        otherwise legacy shift-by-1. seed_weight (>1) up-weights the first-hit loss so the
+        model is forced to fit the vertex-anchored seed instead of averaging it away.
         """
         B, N = layer_classes.shape
         device = layer_classes.device
 
-        out = self.forward(layer_classes, continuous, cond, mask, vertex_pos, helix_params)
+        out = self.forward(layer_classes, continuous, cond, mask, vertex_pos, helix_params, jitter=jitter)
         r_bins, phi_bins, z_bins, time_bins = self._tokenize_continuous(continuous, layer_classes, helix_params)
 
         if self.use_vertex:
@@ -318,26 +365,24 @@ class TrackerARModel(nn.Module):
 
         flat_mask = pred_mask.view(-1)
 
-        layer_loss = F.cross_entropy(
-            out["layer_logits"].view(-1, N_LAYERS)[flat_mask],
-            target_layers.view(-1)[flat_mask],
-        )
-        r_loss = F.cross_entropy(
-            out["r_logits"].view(-1, N_BINS_SPATIAL)[flat_mask],
-            target_r.view(-1)[flat_mask],
-        )
-        phi_loss = F.cross_entropy(
-            out["phi_logits"].view(-1, N_BINS_SPATIAL)[flat_mask],
-            target_phi.view(-1)[flat_mask],
-        )
-        z_loss = F.cross_entropy(
-            out["z_logits"].view(-1, N_BINS_SPATIAL)[flat_mask],
-            target_z.view(-1)[flat_mask],
-        )
-        time_loss = F.cross_entropy(
-            out["time_logits"].view(-1, N_BINS_TIME)[flat_mask],
-            target_time.view(-1)[flat_mask],
-        )
+        # per-hit weights: up-weight the seed (position 0) when use_vertex, so the model
+        # actually fits the vertex-anchored first hit instead of averaging it away.
+        wflat = None
+        if self.use_vertex and seed_weight != 1.0:
+            w = torch.ones(B, N, device=device); w[:, 0] = seed_weight
+            wflat = w.view(-1)[flat_mask]
+
+        def _ce(logits, target, C):
+            if wflat is None:
+                return F.cross_entropy(logits.view(-1, C)[flat_mask], target.view(-1)[flat_mask])
+            ce = F.cross_entropy(logits.view(-1, C)[flat_mask], target.view(-1)[flat_mask], reduction="none")
+            return (ce * wflat).sum() / wflat.sum()
+
+        layer_loss = _ce(out["layer_logits"], target_layers, N_LAYERS)
+        r_loss = _ce(out["r_logits"], target_r, N_BINS_SPATIAL)
+        phi_loss = _ce(out["phi_logits"], target_phi, N_BINS_SPATIAL)
+        z_loss = _ce(out["z_logits"], target_z, N_BINS_SPATIAL)
+        time_loss = _ce(out["time_logits"], target_time, N_BINS_TIME)
 
         continuous_loss = (r_loss + phi_loss + z_loss + time_loss) / 4
 
@@ -383,6 +428,7 @@ class TrackerARModel(nn.Module):
 
         memory = self.cond_proj(cond).unsqueeze(1)
         vtok = self._vertex_embed(vertex_pos).unsqueeze(1) if self.use_vertex else None  # (B,1,D)
+        vtx_bias = self._vtx_layer_bias(vertex_pos) if (self.use_vertex and vertex_pos is not None) else None
 
         for step in range(max_n):
             active = n_hits > step
@@ -411,7 +457,10 @@ class TrackerARModel(nn.Module):
             last_h = h[:, -1]
 
             # Sample all tokens (logits / temperature broadens the distribution)
-            next_layer = torch.distributions.Categorical(logits=self.layer_head(last_h) / layer_temp).sample()
+            layer_logits = self.layer_head(last_h)
+            if vtx_bias is not None and step == 0:      # anchor the seed only (see forward)
+                layer_logits = layer_logits + vtx_bias
+            next_layer = torch.distributions.Categorical(logits=layer_logits / layer_temp).sample()
             next_r = torch.distributions.Categorical(logits=self.r_head(last_h) / cont_temp).sample()
             next_phi = torch.distributions.Categorical(logits=self.phi_head(last_h) / cont_temp).sample()
             next_z = torch.distributions.Categorical(logits=self.z_head(last_h) / cont_temp).sample()

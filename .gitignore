@@ -36,6 +36,7 @@ plots/
 # Logs
 *.log
 slurm-*.out
+logs/
 
 # OS
 .DS_Store
