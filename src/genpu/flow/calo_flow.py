@@ -140,9 +140,21 @@ class EnergyHead(nn.Module):
     log-E is PHYSICAL; floor = zero-suppression threshold.
     """
 
-    def __init__(self, embed_dim=64, hidden=128, floor_eps=0.05, n_mix=3, glob_dim=0):
+    def __init__(self, embed_dim=64, hidden=128, floor_eps=0.05, n_mix=3, glob_dim=0,
+                 glob_idx=None):
         super().__init__()
         self.n_mix = n_mix
+        # WHICH globals the head sees. Historically a PREFIX (`glob_std[:, :glob_dim]`), i.e. either
+        # nothing or [total_logE, log_n] together. `glob_idx` selects an explicit list instead, so
+        # the head can be given the COUNT without the energy scale — the 2026-08-14 diagnosis:
+        # `frac_near_floor` is a function of multiplicity, which is the GlobalHead's variable, and
+        # with glob_dim=0 the energy head can only infer it implicitly through a shared trunk.
+        # Five separate changes that disturbed that implicit route all degraded frac_near_floor.
+        # Passing log_n explicitly is NOT the ruled-out "energy head on the sampled global": that
+        # failure was total_logE (dim 0) making continuous cell energy a sharp function of a noisy
+        # energy SCALE. A count is a different quantity, and it is the floor Bernoulli that needs it.
+        self.glob_idx = list(glob_idx) if glob_idx is not None else list(range(glob_dim))
+        glob_dim = len(self.glob_idx)
         self.glob_dim = glob_dim
         # floor_logit + n_mix*(weight_logit, mu, log_sigma): a K-Gaussian MIXTURE over
         # above-floor log-E captures the skewed tail a single Gaussian misses (the
@@ -154,7 +166,7 @@ class EnergyHead(nn.Module):
         if self.glob_dim:
             if glob_std is None:
                 raise ValueError("EnergyHead built with glob_dim>0 needs glob_std")
-            cond_embed = torch.cat([cond_embed, glob_std[:, :self.glob_dim]], dim=-1)
+            cond_embed = torch.cat([cond_embed, glob_std[:, self.glob_idx]], dim=-1)
         o = self.net(cond_embed)
         m = o[:, 1:].view(-1, self.n_mix, 3)
         return o[:, 0], m[..., 0], m[..., 1], m[..., 2].clamp(-4, 3)  # floor_logit, w_logit, mu, log_sigma
@@ -202,7 +214,7 @@ class CaloFlow(nn.Module):
                  energy_use_glob=True, logE_max=None, logE_max_pdg=None, width_norm=False,
                  ctx_pt_edges=None, ctx_loc=None, ctx_scale=None, ctx_mask=None,
                  separate_trunks=False, core_anchored=False, anchor_cond=False,
-                 anchor_mean=None, anchor_std=None):
+                 anchor_mean=None, anchor_std=None, energy_glob_idx=None):
         super().__init__()
         # CONDITIONING TRUNK(S). Shared (the original) means one ParticleConditioning MLP feeds all
         # three heads and the summed loss back-propagates every head's gradient into it — so changing
@@ -229,8 +241,10 @@ class CaloFlow(nn.Module):
                                anchor_dim=anchor_dim)
         self.points = PointCFM(embed_dim=embed_dim, hidden=hidden_pt)
         # energy sees (total_logE, log_n) — the shower energy scale particle features can't predict
+        # energy_glob_idx overrides energy_use_glob: e.g. [1] = log_n only (multiplicity, no scale)
         self.energy = EnergyHead(embed_dim=embed_dim, n_mix=4,   # extra component for the sub-floor tail
-                                 glob_dim=2 if energy_use_glob else 0)
+                                 glob_dim=2 if energy_use_glob else 0,
+                                 glob_idx=energy_glob_idx)
         for k, v in norm.items():
             self.register_buffer(k, torch.as_tensor(v, dtype=torch.float32))
         if log_floor is None:
@@ -256,6 +270,9 @@ class CaloFlow(nn.Module):
         # produce plausible-looking marginals.
         self.register_buffer("core_anchored", torch.tensor(1.0 if core_anchored else 0.0))
         self.register_buffer("anchor_cond_on", torch.tensor(1.0 if anchor_cond else 0.0))
+        # which globals the energy head sees, so from_checkpoint can rebuild the exact shape
+        self.register_buffer("energy_glob_idx",
+                             torch.tensor(self.energy.glob_idx, dtype=torch.long))
         self.register_buffer("anchor_mean", torch.zeros(3) if anchor_mean is None
                              else torch.as_tensor(anchor_mean, dtype=torch.float32))
         self.register_buffer("anchor_std", torch.ones(3) if anchor_std is None
@@ -311,8 +328,13 @@ class CaloFlow(nn.Module):
         to be inferred from the state dict rather than defaulted. Older checkpoints simply lack the
         keys and fall back to the pre-existing behaviour.
         """
-        opts = dict(energy_use_glob=sd["energy.net.0.weight"].shape[1] > 64,
-                    width_norm=bool(float(sd.get("width_norm", 0.0))) or len(norm["glob_mean"]) >= 5,
+        # the energy head's global inputs: explicit index list on new checkpoints, else the old
+        # prefix rule (input wider than the embedding == it took [total_logE, log_n])
+        if "energy_glob_idx" in sd:
+            opts = dict(energy_glob_idx=sd["energy_glob_idx"].tolist())
+        else:
+            opts = dict(energy_use_glob=sd["energy.net.0.weight"].shape[1] > 64)
+        opts.update(width_norm=bool(float(sd.get("width_norm", 0.0))) or len(norm["glob_mean"]) >= 5,
                     separate_trunks=any(k.startswith("cond_glob.") for k in sd),
                     core_anchored=bool(float(sd.get("core_anchored", 0.0))),
                     anchor_cond=bool(float(sd.get("anchor_cond_on", 0.0))))

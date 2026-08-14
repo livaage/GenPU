@@ -39,6 +39,14 @@ def main():
                          "bin) before the pooled quantile transform — fixes the under-dispersed "
                          "per-bin core spread (0.58x real for e±, 0.94x for pions)")
     ap.add_argument("--ctx_pt_bins", type=int, default=8)
+    ap.add_argument("--energy_glob_idx", type=int, nargs="+", default=None,
+                    help="which standardised globals the ENERGY head sees, by index "
+                         "(0=total_logE, 1=log_n). `--energy_glob_idx 1` gives it MULTIPLICITY "
+                         "without the energy scale: frac_near_floor is a function of multiplicity, "
+                         "which is the GlobalHead's variable, and with --no_energy_glob the energy "
+                         "head can only infer it implicitly through a shared trunk — five separate "
+                         "changes that disturbed that route all degraded frac_near_floor. Distinct "
+                         "from the ruled-out full-global conditioning, which failed on dim 0.")
     ap.add_argument("--anchor_cond", action="store_true",
                     help="condition the GlobalHead (only) on the anchor: [a_eta,a_phi,|a|] + a "
                          "branch one-hot. Fixes the measured branch blindness — the real residual "
@@ -170,7 +178,7 @@ def main():
     model = CaloFlow(norm, log_floor=log_floor, energy_use_glob=not args.no_energy_glob,
                      logE_max=logE_max, logE_max_pdg=logE_max_pdg, width_norm=width_norm,
                      separate_trunks=args.separate_trunks,
-                     core_anchored=core_anchored != "none",
+                     core_anchored=core_anchored != "none", energy_glob_idx=args.energy_glob_idx,
                      **anchor_kwargs, **qt_kwargs, **ctx_kwargs).to(dev)
     if core_anchored != "none":
         anc = d["anchor"]; amode = d["anchor_mode"]
@@ -182,7 +190,8 @@ def main():
     if width_norm:
         print(f"width_norm ON (slice): points are width-normalised, log_width = glob dim 4 "
               f"(mean {glob[:,4].mean():.2f} std {glob[:,4].std():.2f})")
-    print(f"energy head: glob_dim={model.energy.glob_dim}  logE_max={logE_max:.3f} "
+    print(f"energy head: glob_idx={model.energy.glob_idx} (0=total_logE, 1=log_n)  "
+          f"logE_max={logE_max:.3f} "
           f"(hardest cell {np.exp(logE_max):.4g} GeV)")
     print("  per-class logE_max: " + ", ".join(
         f"{int(c)}:{logE_max_pdg[int(c)]:.2f}" for c in np.unique(pt_pdg_np)))
