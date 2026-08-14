@@ -276,7 +276,26 @@ pion/proton weak spot (W/σ 0.32/0.33 vs photon 0.11). Needs a width feature to 
 - **Generalize v3**: all-species surface slice + per-species count head → honest full-event gate vs the 0.77.
 - **Stale checkpoints**: old `pion_v1`/`pion_v2_long` are 128-bin/pre-abspos, unloadable by current code.
 
-## THE unifying calo diagnosis (2026-08-14) — the energy head needs MULTIPLICITY, and only gets it implicitly
+## CALO STATE OF PLAY after 2026-08-14 (read this before proposing anything calo)
+**Best config: plain Phase 1 helix** (`pion_anchor`, `electron_anchor`) — unbeaten across SIX
+variants tried on 2026-08-14: anchor_cond, `line`/`auto` anchors, anchor_cond+separate trunks,
+energy-head-on-`log_n`, and the combinations.
+- **The core is solved.** e± per-bin core spread 0.585 → **0.99** (residual frame); with anchor
+  conditioning the physical frame reaches **1.00** and branch ratios ~0.8-1.0. Pion residual 0.93.
+- **The binding constraint moved to the ENERGY head.** `frac_near_floor` has been the top or
+  near-top discriminator in every run since 2026-08-13, and no per-head patch has moved it.
+- **The recurring pattern: every change improved its own mechanism target and lost on the gate**,
+  because 8 of the gate's 10 features are energy/multiplicity, downstream of the head being
+  perturbed. A change that halves the core error and nudges `logE_p90` reads as a regression.
+  The width gate was added for exactly this reason; the core may need the same treatment.
+- **Separate trunks isolate exactly** (val_gnll bit-identical across runs differing only in the
+  energy head) and buy a much better GlobalHead (val_gnll -3.395 vs -2.427) for a worse energy head
+  (val_ehl 0.2655 vs 0.2083). The energy head's loss under isolation is a **multi-task
+  representation benefit**, NOT a missing multiplicity signal — `log_n` conditioning recovers
+  essentially none of it (0.2655 → 0.2633).
+See [energy-head log_n entry](experiment-memory/2026-08-14-energy-head-logn-PARTIAL.md).
+
+## Partly-right calo diagnosis (2026-08-14) — the energy head is under-informed about MULTIPLICITY
 `frac_near_floor` is a function of multiplicity, which is the **GlobalHead's** variable (`log_n`).
 Every run uses `--no_energy_glob`, so the energy head is never told multiplicity and must infer it
 **through the shared trunk**. That one fact explains five separate failures:
@@ -293,17 +312,23 @@ Confirmed by likelihood, not just the gate: e± **val_ehl 0.2655 (separate) vs 0
 60k, with val_cfm/val_gnll identical. It also *predicts* Phase 0c's species ordering (separate trunks
 hurt photon 4.4 cells/shower, mild on e± 10.6, helped pion 15.6) — fewer cells, more the floor
 fraction matters per event, more the energy head depends on knowing multiplicity.
-**NEXT: separate trunks + condition the energy head on `log_n` ONLY** (the idea Phase 0c wrote down
-and never ran). Not the ruled-out "energy head on the sampled global" — that was `total_logE` making
-continuous cell energy a sharp function of a noisy energy scale; a COUNT is a different quantity, and
-it is the floor Bernoulli that needs it. Needs `EnergyHead.glob_dim` to take an index list rather
-than a prefix. See [falsification entry](experiment-memory/2026-08-14-anchor-cond-separate-trunks-FALSIFIED.md).
+**TESTED (`--energy_glob_idx 1`), and it is REAL BUT SMALL**: floor fraction improves on every
+species (pion 0.618→**0.574**, e− 0.601→**0.583**, e+ 0.592→**0.564**), per-shower energy improves
+2.4x (`logEreco` W/σ 0.0399→**0.0165**, the best on record), val_ehl improves in both trunk settings
+— but the upper energy percentiles get worse (`logE_p90` 0.548→0.589) so gate8 nets out slightly
+worse, and it does NOT rescue the separate-trunks damage. Flag stays opt-in.
+See [falsification entry](experiment-memory/2026-08-14-anchor-cond-separate-trunks-FALSIFIED.md)
+and [the log_n result](experiment-memory/2026-08-14-energy-head-logn-PARTIAL.md).
 
 **Anchor conditioning is confirmed robust and trunk-independent on its own target**: e± physical core
 mechanism 1.275 → **1.00**, pion 0.929 → **1.02**, branch ratios → ~0.8-1.0, at identical
 val_cfm/val_gnll. The only thing between it and a shipped win is the floor fraction above.
 
 ## Ruled out
+- **energy head on `log_n`** (`--energy_glob_idx 1`) as a GATE lever — improves its target on every
+  species and is the best per-shower-energy setting on record, but loses the upper energy
+  percentiles and nets slightly worse; recovers none of the separate-trunks damage.
+  [2026-08-14](experiment-memory/2026-08-14-energy-head-logn-PARTIAL.md).
 - **anchor_cond + `--separate_trunks`** — PREDICTION FALSIFIED (predicted gate recovery; got
   gate8 0.886→**0.965**, cell_logE 0.019→**0.080**). Killed the trunk-interference diagnosis and
   produced the unifying one above.
