@@ -21,11 +21,26 @@ AUX_PRIMARY, AUX_PARENT, AUX_VX, AUX_VY, AUX_VZ, AUX_ENERGY = range(6)
 CH_ETA, CH_PHI, CH_LOGE, CH_FRAC, CH_DET = range(5)
 
 
-def event_features(eta, phi, E, n_src):
+FEATURE_NAMES = ["n_cells", "log_totE", "logE_mean", "logE_std", "logE_max", "logE_p90",
+                 "frac_near_floor", "cells_per_src"]
+# LATERAL SHAPE, added 2026-08-13. The 8 features above are all energy/multiplicity, so the gate
+# was blind to shower width — the pion's and proton's worst observable (W/sigma 0.32/0.33 vs the
+# photon's 0.11) could not move it. Reported as a SEPARATE 10-feature gate so the 8-feature series
+# stays comparable with every earlier number.
+WIDTH_FEATURE_NAMES = ["width_mean", "width_std"]
+
+
+def event_features(eta, phi, E, n_src, widths=None):
     logE = np.log(E + 1e-12); tot = E.sum()
     p90 = np.percentile(logE, 90) if len(logE) else -30.0
-    return np.array([len(E), np.log(tot + 1e-12), logE.mean(), logE.std(), logE.max(), p90,
-                     float((logE < np.log(5e-5) + 0.5).mean()), len(E) / max(n_src, 1)], dtype=np.float32)
+    f = [len(E), np.log(tot + 1e-12), logE.mean(), logE.std(), logE.max(), p90,
+         float((logE < np.log(5e-5) + 0.5).mean()), len(E) / max(n_src, 1)]
+    if widths is not None:
+        # per-shower widths of the showers in this event: their mean sets the typical lateral
+        # size, their spread carries the shower-to-shower variation an i.i.d. point model loses
+        f += [float(np.mean(widths)) if len(widths) else 0.0,
+              float(np.std(widths)) if len(widths) else 0.0]
+    return np.array(f, dtype=np.float32)
 
 
 def rank_auc(s, y):
@@ -43,6 +58,28 @@ def main():
     ap.add_argument("--steps", type=int, default=50)
     ap.add_argument("--batch", type=int, default=200000)
     ap.add_argument("--tag", default="photon")
+    ap.add_argument("--logE_max", type=float, default=None,
+                    help="override the energy-head sampling clamp [log GeV]. Pre-audit checkpoints "
+                         "carry no bound, so pass the training slice's max cell log-E to bound the "
+                         "unphysical mixture tail without retraining or touching the marginal.")
+    ap.add_argument("--logE_max_slice", default=None,
+                    help="npz slice to fit PER-SPECIES cell clamps from (checkpoints trained before "
+                         "the per-class bound existed carry no logE_max_pdg buffer)")
+    ap.add_argument("--width_renorm", action="store_true",
+                    help="width-normalised models only: project each sampled cloud to exactly unit "
+                         "RMS before scaling by the sampled width (removes the ~1/sqrt(2n) smearing "
+                         "that i.i.d. draws add to the width distribution)")
+    ap.add_argument("--no_econs", action="store_true",
+                    help="disable the E_reco <= E_true energy-conservation bound (A/B only)")
+    ap.add_argument("--no_partition", action="store_true",
+                    help="A/B: let the shower total be the SUM of independently drawn cells "
+                         "(pre-audit path) instead of renormalising to the sampled global total")
+    ap.add_argument("--anchor_kind", choices=["helix", "line", "auto"], default="helix",
+                    help="must MATCH the slice the checkpoint was trained on: 'line' forces the "
+                         "straight-line anchor for charged particles too (the brem hypothesis)")
+    ap.add_argument("--geometry", default=None,
+                    help="calo_geometry.json for the helix core anchor (default: repo root). Only "
+                         "used when the checkpoint was trained on a --core_anchor helix slice.")
     ap.add_argument("--outdir", default="/home/lv7805/genpu/plots/calo/metrics")
     args = ap.parse_args()
     dev = "cuda" if torch.cuda.is_available() else "cpu"; torch.manual_seed(0); rng = np.random.default_rng(0)
@@ -58,12 +95,30 @@ def main():
     norm = {"cont_mean": _get("mean"), "cont_std": _get("std")}
     for k in ["glob_mean", "glob_std", "pts_mean", "pts_std"]:
         v = src[k]; norm[k] = v.cpu().numpy() if hasattr(v, "cpu") else np.asarray(v)
-    model = CaloFlow(norm).to(dev)
-    miss = model.load_state_dict(sd, strict=False)
-    unexp = [k for k in miss.unexpected_keys if not k.startswith(("cond_mean", "cond_std"))]
-    missk = [k for k in miss.missing_keys if not k.startswith(("cont_mean", "cont_std"))]
+    # energy-head conditioning is inferred from the checkpoint's first layer: post-audit
+    # checkpoints take (cond_embed + 2 global dims), pre-audit ones cond_embed alone.
+    model, missing, unexpected = CaloFlow.from_checkpoint(sd, norm)
+    model = model.to(dev)
+    eglob = model.energy.glob_dim > 0
+    wnorm = bool(model.width_norm > 0)
+    unexp = [k for k in unexpected if not k.startswith(("cond_mean", "cond_std"))]
+    missk = [k for k in missing if not k.startswith(("cont_mean", "cont_std"))]
     if missk or unexp:
         print(f"WARN load: missing={missk[:6]} unexpected={unexp[:6]}")
+    if bool((model.ctx_mask > 0).any()):
+        print(f"ctx_norm ON: {model.ctx_loc.shape[0]} contexts, dims {torch.where(model.ctx_mask>0)[0].tolist()}")
+    if args.logE_max is not None:
+        model.logE_max.fill_(args.logE_max)
+    if args.logE_max_slice:
+        sd_ = np.load(args.logE_max_slice)
+        pts_pdg = np.repeat(sd_["pdg"].astype(np.int64), np.diff(sd_["offsets"]))
+        le_ = sd_["points_flat"][:, 2]
+        for c in np.unique(pts_pdg):
+            model.logE_max_pdg[int(c)] = float(le_[pts_pdg == c].max())
+        shown = {int(c): round(float(model.logE_max_pdg[int(c)]), 2) for c in np.unique(pts_pdg)}
+        print(f"per-class logE_max from {Path(args.logE_max_slice).name}: {shown}")
+    print(f"energy head: cond_glob={eglob}  partition={not args.no_partition}  "
+          f"logE_max={float(model.logE_max):.3f}")
     model.eval()
 
     d = np.load(Path(args.preproc_dir) / f"shard_{args.shard:04d}_stage2.npz")
@@ -79,26 +134,47 @@ def main():
 
     contS = torch.as_tensor((cont - norm["cont_mean"]) / norm["cont_std"], device=dev)
     pdgT = torch.as_tensor(pdg, device=dev)
+    # CORE ANCHOR (Phase 1). Recomputed here from TRUTH conditioning with the same code the slice
+    # builder used, so the generation frame matches the training frame exactly. `phi` and (vx,vy)
+    # are not in the `cont` contract (response is phi-invariant, and cont carries only vr), which is
+    # precisely why the anchor is computed outside the model and handed in.
+    anchorT = modeT = None
+    if bool(model.core_anchored > 0):
+        from genpu.calo_geom import core_anchor as anchor_of, load_front_face
+        R_face, Z_face = load_front_face(args.geometry)
+        a_eta, a_phi, a_mode = anchor_of(np.exp(pf[sel, PF_LOGPT]), p_phi, p_eta, pf[sel, PF_CHARGE],
+                                         aux[sel, AUX_VX], aux[sel, AUX_VY], aux[sel, AUX_VZ],
+                                         R_face, Z_face, kind=args.anchor_kind)
+        modeT = torch.as_tensor(a_mode.astype(np.int64), device=dev)
+        anchorT = torch.as_tensor(np.stack([a_eta, a_phi], 1), dtype=torch.float32, device=dev)
+        anchor_branches = {lab: round(float((a_mode == c).mean()), 4) for c, lab in
+                           [(0, "barrel"), (1, "endcap"), (2, "turning"), (3, "none")]}
+        print(f"core anchor ON: {args.anchor_kind} to face (r={R_face:.0f}, |z|={Z_face:.0f}); "
+              f"branches {anchor_branches}, |anchor| median {np.median(np.hypot(a_eta, a_phi)):.4f}"
+              f"{'; GlobalHead conditioned on the anchor' if model.anchor_cond else ''}")
     # generate (batched) + time it
     gen_eta, gen_phi, gen_E, gen_src = [], [], [], []
+    n_sat = 0; n_over = 0
+    E_trueT = torch.as_tensor(E_true, dtype=torch.float32, device=dev)
     torch.cuda.synchronize() if dev == "cuda" else None
     t0 = time.time()
     for s in range(0, len(sel), args.batch):
         e = min(s + args.batch, len(sel))
         with torch.no_grad():
-            ce = model.cond_embed(contS[s:e], pdgT[s:e])
-            g_std = model.glob.sample(ce); g = model.unstd_glob(g_std).cpu().numpy()
-            g_n = np.clip(np.round(np.exp(g[:, 1])).astype(int), 1, 128)
-            repn = np.repeat(np.arange(e - s), g_n); rep = torch.as_tensor(repn, device=dev)
-            pos_std = model.points.sample(ce[rep], g_std[rep][:, :2], steps=args.steps)
-            le = model.energy.sample(ce[rep], model.log_floor).cpu().numpy()
-            pos = model.unstd_pos(pos_std).cpu().numpy()
-        # per-shower core (glob dims 2,3) when present: points are DELTAS from the core, so add it.
-        core = g[:, 2:4] if g.shape[1] >= 4 else np.zeros((len(g), 2), np.float32)
-        gen_E.append(np.exp(le).astype(np.float32))
+            sh = model.sample_showers(contS[s:e], pdgT[s:e], steps=args.steps,
+                                      partition=not args.no_partition,
+                                      e_true=None if args.no_econs else E_trueT[s:e],
+                                      width_renorm=args.width_renorm,
+                                      core_anchor=None if anchorT is None else anchorT[s:e],
+                                      anchor_mode=None if modeT is None else modeT[s:e])
+        repn = sh["src"].cpu().numpy()
+        pos = sh["pos"].cpu().numpy(); core = sh["core"].cpu().numpy()
+        gen_E.append(np.exp(sh["logE"].cpu().numpy()).astype(np.float32))
+        # points are DELTAS from the per-shower core, which is itself an offset from the particle
         gen_eta.append(p_eta[s:e][repn] + core[repn, 0] + pos[:, 0])
         gen_phi.append(p_phi[s:e][repn] + core[repn, 1] + pos[:, 1])
         gen_src.append(repn + s)
+        n_sat += int(sh["scale_saturated"].sum()); n_over += int(sh["over_etrue"].sum())
     torch.cuda.synchronize() if dev == "cuda" else None
     gen_time = time.time() - t0
     gen_E = np.concatenate(gen_E); gen_eta = np.concatenate(gen_eta); gen_phi = np.concatenate(gen_phi); gen_src = np.concatenate(gen_src)
@@ -133,11 +209,20 @@ def main():
         m = bi == bb
         if m.sum() < 50:
             continue
+        # mean response is tail-dominated (a single unphysical cell moved a 140k-shower bin
+        # mean to 4.7), so report the MEDIAN and a robust IQR/median width alongside it —
+        # the mean/max pair then reads as the tail diagnostic it is.
+        def iqr_med(r):
+            q1, q2, q3 = np.percentile(r, [25, 50, 75])
+            return float((q3 - q1) / (q2 + 1e-12))
         response.append({"logE_true_med": round(float(np.median(np.log10(E_true[m]))), 2),
                          "n": int(m.sum()),
                          "resp_real": round(float(np.mean(resp_r[m])), 3), "resp_gen": round(float(np.mean(resp_g[m])), 3),
+                         "respmed_real": round(float(np.median(resp_r[m])), 5), "respmed_gen": round(float(np.median(resp_g[m])), 5),
                          "reso_real": round(float(np.std(resp_r[m]) / (np.mean(resp_r[m]) + 1e-9)), 3),
-                         "reso_gen": round(float(np.std(resp_g[m]) / (np.mean(resp_g[m]) + 1e-9)), 3)})
+                         "reso_gen": round(float(np.std(resp_g[m]) / (np.mean(resp_g[m]) + 1e-9)), 3),
+                         "iqrmed_real": round(iqr_med(resp_r[m]), 3), "iqrmed_gen": round(iqr_med(resp_g[m]), 3),
+                         "respmax_real": round(float(resp_r[m].max()), 3), "respmax_gen": round(float(resp_g[m].max()), 3)})
 
     # (2) event gate
     ev_of = eid[sel]; uev = np.unique(ev_of); Xr, Xg = [], []
@@ -146,23 +231,61 @@ def main():
         re, rp, rE = [], [], []
         for i in pm:
             a, b = off[sel[i]], off[sel[i] + 1]; re.append(ch[a:b, CH_ETA]); rp.append(ch[a:b, CH_PHI]); rE.append(np.exp(ch[a:b, CH_LOGE]))
-        Xr.append(event_features(np.concatenate(re), np.concatenate(rp), np.concatenate(rE), n_src))
-        gm = np.isin(gen_src, pm); Xg.append(event_features(gen_eta[gm], gen_phi[gm], gen_E[gm], n_src))
+        # per-shower widths of THIS event's showers (already computed per shower above), so the
+        # width features are built from the same numbers the Wasserstein table reports
+        Xr.append(event_features(np.concatenate(re), np.concatenate(rp), np.concatenate(rE), n_src,
+                                 widths=r_width[pm]))
+        gm = np.isin(gen_src, pm)
+        Xg.append(event_features(gen_eta[gm], gen_phi[gm], gen_E[gm], n_src, widths=g_width[pm]))
     Xr, Xg = np.array(Xr), np.array(Xg)
-    X = np.concatenate([Xr, Xg]); y = np.concatenate([np.zeros(len(Xr)), np.ones(len(Xg))])
-    Xs = (X - X.mean(0)) / (X.std(0) + 1e-6); perm = rng.permutation(len(X)); ntr = len(X) // 2
-    Xt = torch.as_tensor(Xs, dtype=torch.float32, device=dev); yt = torch.as_tensor(y, dtype=torch.float32, device=dev)
-    clf = torch.nn.Sequential(torch.nn.Linear(X.shape[1], 64), torch.nn.SiLU(), torch.nn.Linear(64, 64), torch.nn.SiLU(), torch.nn.Linear(64, 1)).to(dev)
-    opt = torch.optim.Adam(clf.parameters(), lr=1e-3); tri = torch.as_tensor(perm[:ntr], device=dev)
-    for _ in range(800):
-        opt.zero_grad(); l = torch.nn.functional.binary_cross_entropy_with_logits(clf(Xt[tri]).squeeze(-1), yt[tri]); l.backward(); opt.step()
-    with torch.no_grad():
-        auc = rank_auc(clf(Xt[torch.as_tensor(perm[ntr:], device=dev)]).squeeze(-1).cpu().numpy(), y[perm[ntr:]])
+    y = np.concatenate([np.zeros(len(Xr)), np.ones(len(Xg))])
+    perm = rng.permutation(len(Xr) + len(Xg)); ntr = (len(Xr) + len(Xg)) // 2
+    yt = torch.as_tensor(y, dtype=torch.float32, device=dev)
+
+    def gate(ncol):
+        """Train the two-sample classifier on the first `ncol` event features -> held-out AUC."""
+        X = np.concatenate([Xr[:, :ncol], Xg[:, :ncol]])
+        Xs = (X - X.mean(0)) / (X.std(0) + 1e-6)
+        Xt = torch.as_tensor(Xs, dtype=torch.float32, device=dev)
+        clf = torch.nn.Sequential(torch.nn.Linear(ncol, 64), torch.nn.SiLU(),
+                                  torch.nn.Linear(64, 64), torch.nn.SiLU(), torch.nn.Linear(64, 1)).to(dev)
+        opt = torch.optim.Adam(clf.parameters(), lr=1e-3); tri = torch.as_tensor(perm[:ntr], device=dev)
+        for _ in range(800):
+            opt.zero_grad()
+            torch.nn.functional.binary_cross_entropy_with_logits(clf(Xt[tri]).squeeze(-1), yt[tri]).backward()
+            opt.step()
+        with torch.no_grad():
+            s = clf(Xt[torch.as_tensor(perm[ntr:], device=dev)]).squeeze(-1).cpu().numpy()
+        return float(rank_auc(s, y[perm[ntr:]]))
+
+    n8 = len(FEATURE_NAMES)
+    auc = gate(n8)                                  # the historical 8-feature gate (comparable)
+    auc_w = gate(n8 + len(WIDTH_FEATURE_NAMES))     # + lateral shape (strictly more informative)
+
+    # WHICH event feature carries the gate? A single-variable AUC per feature (sign-agnostic)
+    # says what to fix next; the composite AUC alone never does.
+    per_feat = {}
+    for j, nm in enumerate(FEATURE_NAMES + WIDTH_FEATURE_NAMES):
+        a = rank_auc(np.concatenate([Xr[:, j], Xg[:, j]]), y)
+        per_feat[nm] = round(float(max(a, 1 - a)), 4)
 
     speed = {"particles": int(len(sel)), "gen_seconds": round(gen_time, 2), "ode_steps": args.steps,
              "particles_per_sec": round(len(sel) / gen_time, 1), "us_per_particle": round(1e6 * gen_time / len(sel), 1)}
     out = {"tag": args.tag, "pdg_class": args.pdg_class, "shard_heldout": args.shard, "n_particles": int(len(sel)),
-           "event_gate_auc": round(float(auc), 4), "wasserstein_over_std": {k: round(v, 4) for k, v in wnorm.items()},
+           "energy_cond_glob": bool(eglob), "partition_energies": bool(not args.no_partition),
+           "logE_max": float(model.logE_max), "scale_saturated_frac": round(n_sat / max(len(sel), 1), 5),
+           "energy_conservation": bool(not args.no_econs),
+           "width_norm": bool(wnorm), "width_renorm": bool(args.width_renorm),
+           "core_anchored": bool(model.core_anchored > 0),
+           "anchor_kind": args.anchor_kind if anchorT is not None else None,
+           "anchor_cond": bool(model.anchor_cond),
+           "anchor_branch_frac": (anchor_branches if anchorT is not None else None),
+           "over_etrue_frac_gen": round(n_over / max(len(sel), 1), 6),
+           "over_etrue_frac_real": round(float((r_Ereco > E_true).mean()), 6),
+           "event_gate_auc": round(float(auc), 4),           # 8 energy/multiplicity features (historical)
+           "event_gate_auc_width": round(float(auc_w), 4),   # + per-shower width mean/std
+           "gate_auc_per_feature": per_feat,
+           "wasserstein_over_std": {k: round(v, 4) for k, v in wnorm.items()},
            "energy_response": response, "speed": speed}
     outdir = Path(args.outdir); outdir.mkdir(parents=True, exist_ok=True)
     (outdir / f"metrics_{args.tag}.json").write_text(json.dumps(out, indent=2))
