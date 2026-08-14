@@ -98,8 +98,11 @@ def helix_at_z(pT, phi0, eta, q, vx, vy, vz, z, B=B_FIELD, sign=-1.0):
     s = (np.asarray(z, float) - np.asarray(vz, float)) / np.where(np.abs(sh) < 1e-3, np.sign(sh) * 1e-3 + 1e-9, sh)
     s = np.clip(s, 0.0, np.pi * R)                          # forward arc, at most half a turn
     a0 = np.arctan2(np.asarray(vy) - cy, np.asarray(vx) - cx)
-    # sweep direction: sign of angular motion = -sign*sign(q) (matches the calibrated curvature side)
-    w = -sign * np.sign(np.asarray(q, float))
+    # sweep direction: sign*sign(q), the SAME convention as helix_at_r and layer_references.
+    # This was -sign*sign(q) until 2026-08-14, i.e. backwards; measured on 80k real endcap tracker
+    # hits (|z|>1200mm, outermost hit of each track), the old sign gives median |dphi| 0.633 rad
+    # and |dr| 33mm against the true hit, the correct one 0.016 rad and 8.9mm.
+    w = sign * np.sign(np.asarray(q, float))
     a = a0 + w * s / R
     x = cx + R * np.cos(a); y = cy + R * np.sin(a)
     return x, y, np.hypot(x, y)
