@@ -147,7 +147,12 @@ def process_event_vectorized(
     trk_features = np.stack([trk_layer_class, trk_r, trk_phi, trk_z, trk_time], axis=1)
 
     # Sort tracker hits by particle_id for fast grouping
-    trk_sort = np.argsort(trk_pid)
+    # STABLE: np.argsort defaults to quicksort, which is NOT stable, so ties (hits sharing a
+    # particle_id) come out in arbitrary order and the within-particle row order is not
+    # reproducible across runs. Found 2026-08-24 when a calo sidecar failed its alignment assert
+    # while being identical as a SET. Existing shards were written with the unstable sort, so
+    # consumers aligning to them must match by VALUE, not by row index.
+    trk_sort = np.argsort(trk_pid, kind="stable")
     trk_pid_sorted = trk_pid[trk_sort]
     trk_features_sorted = trk_features[trk_sort]
 
@@ -183,7 +188,7 @@ def process_event_vectorized(
         flat_calo_contrib_e = np.concatenate(flat_calo_contrib_e)
 
         # Sort by particle_id
-        calo_sort = np.argsort(flat_calo_pid)
+        calo_sort = np.argsort(flat_calo_pid, kind="stable")   # see the tracker note above
         flat_calo_pid_sorted = flat_calo_pid[calo_sort]
         flat_calo_idx_sorted = flat_calo_idx[calo_sort]
         flat_calo_contrib_e_sorted = flat_calo_contrib_e[calo_sort]
@@ -197,6 +202,7 @@ def process_event_vectorized(
     n_calo_hits = np.zeros(n_particles, dtype=np.int32)
     tracker_hit_list = []
     calo_hit_list = []
+    calo_rz_list = []
 
     for i, pid in enumerate(particle_ids):
         # Tracker: binary search in sorted array
@@ -218,6 +224,12 @@ def process_event_vectorized(
             cidxs = flat_calo_idx_sorted[lo_c:hi_c]
             cenergies = flat_calo_contrib_e_sorted[lo_c:hi_c]
             # (eta, phi, log_contrib_energy, contrib_energy_fraction, detector)
+            # (r, z) of the same cells, in the SAME row order as `hits`. Kept RAW rather than
+            # reduced to a "depth" here: collapsing (x,y,z) -> (eta,phi) at this boundary is
+            # exactly what lost the longitudinal dimension for months (see PIPELINE.md §2), so
+            # store the coordinates and let downstream choose the depth convention.
+            calo_rz_list.append(np.stack([
+                np.hypot(calo_x[cidxs], calo_y[cidxs]), calo_z[cidxs]], axis=1).astype(np.float32))
             hits = np.stack([
                 calo_eta[cidxs],
                 calo_phi[cidxs],
@@ -228,6 +240,7 @@ def process_event_vectorized(
             calo_hit_list.append(hits)
         else:
             calo_hit_list.append(np.empty((0, 5), dtype=np.float32))
+            calo_rz_list.append(np.empty((0, 2), dtype=np.float32))
 
     visible_mask = (n_tracker_hits > 0) | (n_calo_hits > 0)
 
@@ -238,6 +251,9 @@ def process_event_vectorized(
         "n_calo_hits": n_calo_hits,
         "tracker_hits": tracker_hit_list,
         "calo_hits": calo_hit_list,
+        # (r, z) per calo contribution, row-aligned with `calo_hits`. ADDITIVE — no saved file
+        # shape changes; scripts/build_calo_depth.py sidecars it onto existing stage2 shards.
+        "calo_rz": calo_rz_list,
         "visible_mask": visible_mask,
         "particle_ids": particle_ids,
     }

@@ -71,6 +71,19 @@ Per event, attributes hits to particles by `particle_id` (`searchsorted`, not a 
 - **pdg identity beyond 17 classes.** Everything unusual becomes class 16 — 6% of particles,
   9,561 distinct masses up to 27.9 GeV (nuclei). `mass` is the only surviving discriminator there.
 
+### Row order within a particle is NOT reproducible in the existing shards
+
+`preprocessing.py` grouped hits with `np.argsort(pid)`, which defaults to quicksort and is **not
+stable**, so ties (hits sharing a particle_id) came out in arbitrary order. Fixed to
+`kind="stable"` on 2026-08-24, but **the shards on disk were written with the unstable sort**, so:
+
+- nothing may assume a within-particle row order in stage2 (it is arbitrary anyway — see §4);
+- anything aligning new data to `calo_hits_flat` must match **by value**, not by row index.
+  `build_calo_depth.py` lexsorts on (eta, phi, logE) and pairs the blocks up.
+
+It never mattered before because no consumer depended on order — but it means the existing shards
+cannot be byte-reproduced, only reproduced as sets.
+
 ### Units of the stored calo record
 
 `calo_hits_flat` rows are **(cell, particle) CONTRIBUTION pairs, not cells.** A cell with 3
@@ -86,6 +99,7 @@ contributors appears 3 times, each carrying that particle's share. Mean 1.206 co
 | `shard_XXXX_stage2.npz` (4 shards: **0,1,2,5**) | `preprocessing.py` | above |
 | `shard_XXXX_graph.npz` | `build_cascade_graph.py` | **every RAW particle** (visible or not): 17 source columns + n_tracker_hits, n_calo_hits, calo_energy_sum, r_innermost, r_outermost, depth, root_primary_id, visible |
 | `shard_XXXX_pids.npz` | same | join key, stage2 row order |
+| `shard_XXXX_calo_rz.npz` | `build_calo_depth.py` | per-contribution `(r, z)` of the cell, row-aligned with `calo_hits_flat` — the longitudinal coordinate preprocessing drops |
 | `tracker_slice/*.npz` | `build_tracker_slice.py` | cont (S,7), pdg, hits (P,5), offsets |
 | `calo_slice/*.npz` | `build_calo_slice.py` | cont (S,7), glob (S,4), points_flat (P,3), offsets, anchor, anchor_mode |
 
