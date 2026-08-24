@@ -34,7 +34,15 @@ import torch.nn.functional as F
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from genpu.preprocessing import pdg_to_class, N_PDG_CLASSES  # noqa: E402
 
-FEATS = ["log_E", "log_pt", "eta", "charge", "log1p_vr", "abs_vz", "log1p_mass", "d0"]
+# d0 NOTE (2026-08-24): the source `perigee_d0` is NON-FINITE for 41.9% of all particles -- and
+# they are 100% CHARGED (56% of charged particles), the soft ones where the helix perigee diverges.
+# Neutrals actually have it. That is why build_count_slice_stage2.py computes d0 GEOMETRICALLY as
+# vx*sin(phi) - vy*cos(phi), "defined for all particles". We use the geometric one as the real
+# feature, and carry the source perigee only as (sanitised value, defined-flag) -- the flag is
+# itself informative, since undefined correlates with being very soft.
+# |vz| reaches 1.79e6 mm (0.28% beyond 6000 mm), so it enters as log1p, never raw.
+FEATS = ["log_E", "log_pt", "eta", "charge", "log1p_vr", "log1p_absvz", "log1p_mass",
+         "d0_geom", "d0_perigee", "d0_defined"]
 
 
 class IncidenceHead(nn.Module):
@@ -67,15 +75,25 @@ def build(graph_dir, shards):
         eta = np.arcsinh(np.clip(pz / np.clip(pt, 1e-9, None), -30, 30))
         phi = np.arctan2(py, px)
         vr = np.hypot(g["vx"], g["vy"])
-        d0 = g["perigee_d0"].astype(np.float64)
+        d0g = g["vx"] * np.sin(phi) - g["vy"] * np.cos(phi)      # always defined
+        d0p = g["perigee_d0"].astype(np.float64)
+        ok = np.isfinite(d0p)
         C.append(np.stack([np.log(np.clip(g["energy"], 1e-9, None)),
                            np.log(np.clip(pt, 1e-9, None)), eta, g["charge"],
-                           np.log1p(vr), np.abs(g["vz"]), np.log1p(g["mass"]), d0], 1))
+                           np.log1p(vr), np.log1p(np.abs(g["vz"])), np.log1p(g["mass"]),
+                           d0g, np.where(ok, d0p, 0.0), ok.astype(np.float64)], 1))
         P.append(pdg_to_class(g["pdg_id"].astype(np.int64)).astype(np.int64))
         Y.append(np.stack([(g["n_tracker_hits"] > 0), (g["n_calo_hits"] > 0)], 1))
         print(f"  shard {sh}: +{len(P[-1]):,}", flush=True)
-    return (np.concatenate(C).astype(np.float32), np.concatenate(P),
-            np.concatenate(Y).astype(np.float32))
+    Cc = np.concatenate(C).astype(np.float32)
+    # GUARD: a non-finite feature silently trains to NaN for the whole run (seen on job 12880027,
+    # 20k wasted steps). Fail loudly, and name the column.
+    bad = ~np.isfinite(Cc)
+    if bad.any():
+        cols = [FEATS[j] for j in np.where(bad.any(0))[0]]
+        raise SystemExit(f"non-finite features in columns {cols} "
+                         f"({bad.any(1).mean():.4f} of rows) — refusing to train")
+    return Cc, np.concatenate(P), np.concatenate(Y).astype(np.float32)
 
 
 def ece(p, y, nb=15):
