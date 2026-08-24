@@ -141,6 +141,33 @@ compounds outward). Fix under test: **scheduled sampling** (train on own history
   per-species held-out gates γ 0.681, π 0.870, e- 0.888, e+ 0.887, p 0.749, rest 0.626. Covers
   everything; shared capacity costs per-species fidelity (γ 0.557→0.681) — capacity is the open question.
 
+## CALO v2 (2026-08-24) — 3D + re-attributed; `frac_near_floor` COLLAPSED TO CHANCE
+[Entry](experiment-memory/2026-08-24-calo-v2-first-3d-model.md) · ckpts `electron_v2_s0/s1`
+(60k, 2 seeds) · slices `electron_v2.npz` / `electron_v2_h5.npz` · jobs 12899065, 12900324.
+
+**NOT COMPARABLE TO ANY v1 NUMBER** — v1 gated 2D fragment-showers (10.5 cells) against a v1
+reference; v2 gates 3D re-attributed showers (19.8 cells) against a v2 reference. Reading
+0.7456 → 0.81 as a regression is exactly the error the metric change prevents.
+
+- **`frac_near_floor` = 0.5045, i.e. CHANCE.** It was the top or near-top discriminator in every run
+  since 2026-08-13 (0.59-0.60) and survived ~10 experiments. The August energy-head thread was
+  chasing a data-contract artifact, not a modelling failure.
+- **The evidence was already in this file.** v1 `frac_near_floor` tracks each species' FRAGMENT
+  fraction monotonically: γ **0.1% split → 0.510** (already chance), π± ~56% → 0.666,
+  e± 74% → 0.702. **Testable prediction: pion v2 should fall from 0.666 toward chance; photon,
+  never broken, should barely move.**
+- **Depth is modelled** — energy-weighted mean depth real **131.0** vs gen **137.7 / 138.7** mm,
+  bulk profile bins within 3%, the 0-25 mm bin exact to 4 dp. First time the plan's longitudinal
+  acceptance metric has been computable at all.
+- **Seed spread ~10x tighter**: gate8 0.8105 / 0.8074 (**0.003**) vs v1's **0.11**. Likely because
+  v2 is a homogeneous population where v1 mixed fragments with real showers.
+- **New leading discriminator: `logE_max` 0.5758** (upper energy tail). Composite gate 0.81 with no
+  single feature above 0.58, so per-feature AUCs will NOT say what to fix next — a different
+  diagnostic is needed from the one used all August.
+- **Confounded by design**: dedup + re-attribution + depth landed together. `--no_reattribute` exists
+  if attribution needs isolating.
+- **e± ONLY.** No pion / photon / multispecies v2 slice yet.
+
 ## CALO SHOWERS ARE OVER-SPLIT (2026-08-24) — candidate mechanism for the standing e± problem
 [Entry](experiment-memory/2026-08-24-calo-shower-oversplitting.md) · measurement only, **hypothesis
 UNTESTED** (no retrain run).

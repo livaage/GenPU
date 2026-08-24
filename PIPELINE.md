@@ -101,7 +101,9 @@ contributors appears 3 times, each carrying that particle's share. Mean 1.206 co
 | `shard_XXXX_pids.npz` | same | join key, stage2 row order |
 | `shard_XXXX_calo_rz.npz` | `build_calo_depth.py` | per-contribution `(r, z)` of the cell, row-aligned with `calo_hits_flat` — the longitudinal coordinate preprocessing drops |
 | `tracker_slice/*.npz` | `build_tracker_slice.py` | cont (S,7), pdg, hits (P,5), offsets |
-| `calo_slice/*.npz` | `build_calo_slice.py` | cont (S,7), glob (S,4), points_flat (P,3), offsets, anchor, anchor_mode |
+| `calo_slice/*.npz` (**v1**) | `build_calo_slice.py` | cont (S,7), glob (S,4), points_flat **(P,3)**, offsets, anchor, anchor_mode |
+| `shard_XXXX_calo_rz.npz` | `build_calo_depth.py` | per-contribution `(r, z)`, row-aligned to `calo_hits_flat` |
+| `calo_slice/*_v2.npz` (**v2**) | `build_calo_slice_v2.py` | as v1 **plus** points_flat **(P,4)** with depth at index 2, `point_layer` (int16, -1 = barrel), `n_src`, `event_id`, `p_phi`, `E_true` |
 
 **Shards are 0, 1, 2, 5** — 3 and 4 were never preprocessed.
 
@@ -132,9 +134,14 @@ Shared conditioning: `CONT_FEATURES = [log_pt, eta, log_E, charge, mass, vr, vz]
 | Calo flow | `flow/calo_flow.py` | GlobalHead (total_logE, log_n, core_eta, core_phi) + PointFlow + EnergyHead |
 | Incidence | `train_incidence_head.py` | P(tracker trace), P(calo trace) — shared trunk, 2 Bernoullis |
 
-**The calo model is 2D.** `points_flat` is (P,3) = `(d_eta, d_phi, logE)`; `PointFlow` runs CFM on
-`pts[:, :2]`; `sample_showers` returns `pos (P,2)` + `logE`. It generates no depth and no
-`detector`.
+**Calo dimensionality is set by the SLICE** (2026-08-24). `CaloFlow(pos_dim=...)` — 2 for a v1
+(P,3) slice, 3 for a v2 (P,4) slice — and `from_checkpoint` infers it from `PointCFM`'s output
+layer, so old checkpoints stay loadable. Before this the model was 2D unconditionally, which is why
+the plan's depth metrics were never computable.
+
+**ENERGY IS THE LAST POINT COLUMN, always.** Index 2 is `logE` in v1 and **DEPTH** in v2. A hardcoded
+`pts[:, 2]` bounded the energy head with a depth value in millimetres (`logE_max: 2220.00`) without
+erroring — see the entry for 2026-08-24. Read `pts[:, -1]`.
 
 ---
 
@@ -149,6 +156,17 @@ Shared conditioning: `CONT_FEATURES = [log_pt, eta, log_E, charge, mass, vr, vz]
 
 So any change to how particles are partitioned moves 9 of 10 features regardless of model quality.
 
+**`--real_slice` (2026-08-24)** makes the real reference come from a v2 slice, so shower attribution
+has ONE implementation shared by training and evaluation. Without it a v2-trained model is scored
+against v1-attributed real showers, 64.8% of which are fragments. The anchor is then read FROM the
+slice rather than recomputed — recomputing from stage2 rows uses the DEPOSITOR, not the
+calo-incident ancestor, silently undoing re-attribution.
+
+**Depth observables (2026-08-24)**, present only when both sides have depth (guarded, with a warning
+otherwise): `event_gate_auc_depth` (+ energy-weighted `depth_mean`/`depth_std`), `cell_depth` and
+`shower_depth` Wassersteins, and a **longitudinal profile** — the acceptance metric
+`pileup_generator_plan.md:356` names.
+
 ---
 
 ## 7. KNOWN GAPS — specified but NOT built
@@ -162,7 +180,12 @@ So any change to how particles are partitioned moves 9 of 10 features regardless
    cylinder so cells from different layers overlap in radius (max gap 0.985 mm over a 106 mm span).
    Endcaps are exact — dets 9/11 have exactly 48 layers at 5.050 mm, dets 12/14 exactly 36 at
    51.000 mm, 100% of cells on the grid, ~83% of deposited energy.
-3. **Tracker incidence** — the head exists (§5) but is not wired into any generation path.
+3. **Tracker incidence** — the head exists (`train_incidence_head.py`, AUC 0.9993/0.9890, ECE ~5e-4,
+   3-way joint reproduced) but is not wired into any generation path.
+3b. **Depth is not used for CELL IDENTITY.** The v2 slice carries depth and layer, but the gate is
+   still contribution-level: re-attribution deduplicates WITHIN a shower, while two incident
+   particles landing in the same cell still double-count (3.5% at PU0, far more at M3's mu).
+3c. **v2 exists for e± ONLY.** No pion, photon or multispecies v2 slice.
 4. **Stage-1 / cascade generator.** Architecture settled (one recursive model on
    `[log_E, eta, vr, vz, pdg]`, ~3-4 batched levels) but not built.
 5. **M3 event assembly** — superposition, noise process, mu conditioning. Not started.
