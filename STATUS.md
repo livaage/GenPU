@@ -402,8 +402,14 @@ pion/proton weak spot (W/σ 0.32/0.33 vs photon 0.11). Needs a width feature to 
 **Best config: plain Phase 1 helix** (`pion_anchor`, `electron_anchor`) — unbeaten across SIX
 variants tried on 2026-08-14: anchor_cond, `line`/`auto` anchors, anchor_cond+separate trunks,
 energy-head-on-`log_n`, and the combinations.
-- **The core is solved.** e± per-bin core spread 0.585 → **0.99** (residual frame); with anchor
-  conditioning the physical frame reaches **1.00** and branch ratios ~0.8-1.0. Pion residual 0.93.
+- ~~**The core is solved.**~~ **CORRECTED 2026-08-24 (job 12879155)** — the "0.99" is carried by the
+  74% of the slice born INSIDE the calo, which receive the turning-point FALLBACK anchor. Split:
+  born-inside **1.05**, born-outside (real showers) **1.86** (worst bin 2.71). In the frame the
+  mixture fits, real showers are badly over-dispersed. Physical-frame ordering REVERSES (all 1.29 /
+  inside 1.21 / outside **1.15**) because the anchor is exact and carries ~82% of the physical core,
+  so net impact is moderate — but the ANCHOR is better than documented (**5.6x** phi tightening on
+  real showers vs 1.9x pooled) and the MODEL is worse. Pion residual 0.93 unaudited.
+  [entry](experiment-memory/2026-08-24-phase1-headline-carried-by-fragments.md)
 - **The binding constraint moved to the ENERGY head.** `frac_near_floor` has been the top or
   near-top discriminator in every run since 2026-08-13, and no per-head patch has moved it.
 - **The recurring pattern: every change improved its own mechanism target and lost on the gate**,

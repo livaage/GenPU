@@ -49,6 +49,17 @@ def main():
     ap.add_argument("--tag", default="pion")
     ap.add_argument("--n_bins", type=int, default=6)
     ap.add_argument("--max_showers", type=int, default=600000)
+    ap.add_argument("--born", choices=["all", "inside", "outside"], default="all",
+                    help="AUDIT 2026-08-24: restrict to showers whose depositing particle was born "
+                         "OUTSIDE vs INSIDE the calo front face. 64.8%% of calo depositors are born "
+                         "inside (endcap fragments at vr ~ 420 mm but |vz| > 3212 mm) and 91%% of "
+                         "those fall to the TURNING-POINT anchor fallback, because a helix cannot be "
+                         "extrapolated forward to a face the particle is already behind. The logged "
+                         "Phase 1 headline -- e± per-bin core spread 0.585 -> 0.99 -- was measured on "
+                         "the pooled set, so it may be a statement about that fallback rather than "
+                         "about the helix anchor. Splitting says which.")
+    ap.add_argument("--face_r", type=float, default=1259.1966533469083)
+    ap.add_argument("--face_z", type=float, default=3212.5)
     ap.add_argument("--gen_showers", type=int, default=40000)
     ap.add_argument("--out", default="/home/lv7805/genpu/plots/calo/metrics")
     args = ap.parse_args()
@@ -57,6 +68,10 @@ def main():
     cont, glob, off = d["cont"], d["glob"], d["offsets"]
     npt = np.diff(off).astype(int)
     keep = npt > 1                                   # single-cell showers have core == the cell
+    if args.born != "all":
+        _in = (cont[:, CONT_VR] >= args.face_r) | (np.abs(cont[:, CONT_VZ]) >= args.face_z)
+        keep &= _in if args.born == "inside" else ~_in
+        print(f"[born={args.born}] {keep.sum():,} of {(npt > 1).sum():,} multi-cell showers")
     S = min(args.max_showers, int(keep.sum()))
     idx = np.where(keep)[0][:S]
     cont, glob = cont[idx], glob[idx]
