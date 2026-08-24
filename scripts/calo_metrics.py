@@ -30,16 +30,29 @@ FEATURE_NAMES = ["n_cells", "log_totE", "logE_mean", "logE_std", "logE_max", "lo
 WIDTH_FEATURE_NAMES = ["width_mean", "width_std"]
 
 
-def event_features(eta, phi, E, n_src, widths=None):
+DEPTH_FEATURE_NAMES = ["depth_mean", "depth_std"]
+
+
+def event_features(eta, phi, E, n_src, widths=None, depths=None):
     logE = np.log(E + 1e-12); tot = E.sum()
     p90 = np.percentile(logE, 90) if len(logE) else -30.0
     f = [len(E), np.log(tot + 1e-12), logE.mean(), logE.std(), logE.max(), p90,
          float((logE < np.log(5e-5) + 0.5).mean()), len(E) / max(n_src, 1)]
+    if depths is not None:
+        # LONGITUDINAL. Until 2026-08-24 the calo model generated no depth at all, so the gate was
+        # blind to the dimension that separates species most cleanly (measured mean depth: gamma
+        # 113 mm, e± 301, p 335, pi± 470-483) and that drives 0.40-0.54 of intrinsic width.
+        # Energy-weighted so it is the shower's centre of gravity, not a cell count.
+        _w = E / (E.sum() + 1e-12)
+        _dm = float((_w * depths).sum()) if len(depths) else 0.0
+        _ds = float(np.sqrt(max((_w * (depths - _dm) ** 2).sum(), 0.0))) if len(depths) else 0.0
     if widths is not None:
         # per-shower widths of the showers in this event: their mean sets the typical lateral
         # size, their spread carries the shower-to-shower variation an i.i.d. point model loses
         f += [float(np.mean(widths)) if len(widths) else 0.0,
               float(np.std(widths)) if len(widths) else 0.0]
+    if depths is not None:
+        f += [_dm, _ds]
     return np.array(f, dtype=np.float32)
 
 
@@ -140,13 +153,14 @@ def main():
         eid_sh = sd["event_id"]
         off = sd["offsets"]
         pts, glob = sd["points_flat"], sd["glob"]
-        anc_sl = sd["anchor"]
+        anc_sl = sd["anchor"]; amode_sl = sd["anchor_mode"]
         # points are core-relative deltas from (particle + anchor); undo to absolute cell eta/phi
         src = np.repeat(np.arange(len(off) - 1), np.diff(off))
         ch = np.empty((len(pts), 5), np.float32)
         ch[:, CH_ETA] = pts[:, 0] + glob[src, 2] + p_eta[src] + anc_sl[src, 0]
         ch[:, CH_PHI] = pts[:, 1] + glob[src, 3] + p_phi[src] + anc_sl[src, 1]
         ch[:, CH_LOGE] = pts[:, -1]
+        r_depth = pts[:, 2].astype(np.float64) if pts.shape[1] >= 4 else None
         sel = np.arange(len(cont))
         print(f"real reference: v2 slice {Path(args.real_slice).name} — {len(sel):,} showers, "
               f"{len(pts):,} cells (reattributed={bool(sd['reattributed'])})")
@@ -162,6 +176,7 @@ def main():
         pdg = pf[sel, PF_PDG].astype(np.int64); p_eta, p_phi = pf[sel, PF_ETA], pf[sel, PF_PHI]
         E_true = aux[sel, AUX_ENERGY].astype(np.float64)
         eid_sh = eid_all[sel]
+        r_depth = None; anc_sl = amode_sl = None
 
     contS = torch.as_tensor((cont - norm["cont_mean"]) / norm["cont_std"], device=dev)
     pdgT = torch.as_tensor(pdg, device=dev)
@@ -173,9 +188,17 @@ def main():
     if bool(model.core_anchored > 0):
         from genpu.calo_geom import core_anchor as anchor_of, load_front_face
         R_face, Z_face = load_front_face(args.geometry)
-        a_eta, a_phi, a_mode = anchor_of(np.exp(pf[sel, PF_LOGPT]), p_phi, p_eta, pf[sel, PF_CHARGE],
-                                         aux[sel, AUX_VX], aux[sel, AUX_VY], aux[sel, AUX_VZ],
-                                         R_face, Z_face, kind=args.anchor_kind)
+        if anc_sl is not None:
+            # A v2 slice already STORES the anchor its showers were built in — computed for the
+            # calo-incident ANCESTOR, which is the whole point of re-attribution. Recomputing it
+            # here from stage2 particle rows would silently use the wrong particle.
+            a_eta, a_phi = anc_sl[:, 0].astype(np.float64), anc_sl[:, 1].astype(np.float64)
+            a_mode = amode_sl.astype(np.int8)
+        else:
+            a_eta, a_phi, a_mode = anchor_of(np.exp(pf[sel, PF_LOGPT]), p_phi, p_eta,
+                                             pf[sel, PF_CHARGE], aux[sel, AUX_VX], aux[sel, AUX_VY],
+                                             aux[sel, AUX_VZ], R_face, Z_face,
+                                             kind=args.anchor_kind)
         modeT = torch.as_tensor(a_mode.astype(np.int64), device=dev)
         anchorT = torch.as_tensor(np.stack([a_eta, a_phi], 1), dtype=torch.float32, device=dev)
         anchor_branches = {lab: round(float((a_mode == c).mean()), 4) for c, lab in
@@ -184,7 +207,7 @@ def main():
               f"branches {anchor_branches}, |anchor| median {np.median(np.hypot(a_eta, a_phi)):.4f}"
               f"{'; GlobalHead conditioned on the anchor' if model.anchor_cond else ''}")
     # generate (batched) + time it
-    gen_eta, gen_phi, gen_E, gen_src = [], [], [], []
+    gen_eta, gen_phi, gen_E, gen_src, gen_depth = [], [], [], [], []
     n_sat = 0; n_over = 0
     E_trueT = torch.as_tensor(E_true, dtype=torch.float32, device=dev)
     torch.cuda.synchronize() if dev == "cuda" else None
@@ -205,9 +228,17 @@ def main():
         gen_eta.append(p_eta[s:e][repn] + core[repn, 0] + pos[:, 0])
         gen_phi.append(p_phi[s:e][repn] + core[repn, 1] + pos[:, 1])
         gen_src.append(repn + s)
+        if pos.shape[1] >= 3:
+            gen_depth.append(pos[:, 2])
         n_sat += int(sh["scale_saturated"].sum()); n_over += int(sh["over_etrue"].sum())
     torch.cuda.synchronize() if dev == "cuda" else None
     gen_time = time.time() - t0
+    gen_depth = np.concatenate(gen_depth) if gen_depth else None
+    has_depth = (r_depth is not None) and (gen_depth is not None)
+    if (r_depth is not None) != (gen_depth is not None):
+        print(f"WARNING: depth available on only one side (real={r_depth is not None}, "
+              f"gen={gen_depth is not None}) -- depth observables SKIPPED. A 3D model scored "
+              f"against a 2D reference, or vice versa, is not a valid comparison.")
     gen_E = np.concatenate(gen_E); gen_eta = np.concatenate(gen_eta); gen_phi = np.concatenate(gen_phi); gen_src = np.concatenate(gen_src)
 
     # ---- real pooled + per-shower ----
@@ -228,6 +259,15 @@ def main():
     obs = {"cells_per_shower": (r_n, g_n_arr), "cell_logE": (RE, np.log(gen_E + 1e-12)),
            "d_eta": (RP, g_de), "d_phi": (RG, g_dp), "shower_width": (r_width, g_width),
            "logEreco": (np.log(r_Ereco + 1e-12), np.log(g_Ereco + 1e-12))}
+    if has_depth:
+        r_dsh = np.array([np.average(r_depth[off[i]:off[i + 1]],
+                                     weights=np.exp(ch[off[i]:off[i + 1], CH_LOGE]) + 1e-12)
+                          for i in sel])
+        gw = gen_E + 1e-12
+        g_dsh = (np.bincount(gen_src, weights=gen_depth * gw, minlength=len(sel))
+                 / np.maximum(np.bincount(gen_src, weights=gw, minlength=len(sel)), 1e-12))
+        obs["cell_depth"] = (r_depth, gen_depth)
+        obs["shower_depth"] = (r_dsh, g_dsh)
     wass = {k: float(wasserstein_distance(a, b)) for k, (a, b) in obs.items()}
     wnorm = {k: wass[k] / (obs[k][0].std() + 1e-9) for k in obs}
 
@@ -264,10 +304,12 @@ def main():
             a, b = off[sel[i]], off[sel[i] + 1]; re.append(ch[a:b, CH_ETA]); rp.append(ch[a:b, CH_PHI]); rE.append(np.exp(ch[a:b, CH_LOGE]))
         # per-shower widths of THIS event's showers (already computed per shower above), so the
         # width features are built from the same numbers the Wasserstein table reports
+        rd = np.concatenate([r_depth[off[sel[i]]:off[sel[i] + 1]] for i in pm]) if has_depth else None
         Xr.append(event_features(np.concatenate(re), np.concatenate(rp), np.concatenate(rE), n_src,
-                                 widths=r_width[pm]))
+                                 widths=r_width[pm], depths=rd))
         gm = np.isin(gen_src, pm)
-        Xg.append(event_features(gen_eta[gm], gen_phi[gm], gen_E[gm], n_src, widths=g_width[pm]))
+        Xg.append(event_features(gen_eta[gm], gen_phi[gm], gen_E[gm], n_src, widths=g_width[pm],
+                                 depths=gen_depth[gm] if has_depth else None))
     Xr, Xg = np.array(Xr), np.array(Xg)
     y = np.concatenate([np.zeros(len(Xr)), np.ones(len(Xg))])
     perm = rng.permutation(len(Xr) + len(Xg)); ntr = (len(Xr) + len(Xg)) // 2
@@ -292,11 +334,34 @@ def main():
     n8 = len(FEATURE_NAMES)
     auc = gate(n8)                                  # the historical 8-feature gate (comparable)
     auc_w = gate(n8 + len(WIDTH_FEATURE_NAMES))     # + lateral shape (strictly more informative)
+    # + LONGITUDINAL. The 8-feature gate is blind to lateral shape; both are blind to depth, which
+    # the model only started generating on 2026-08-24. Quote this one for anything 3D.
+    auc_d = gate(n8 + len(WIDTH_FEATURE_NAMES) + len(DEPTH_FEATURE_NAMES)) if has_depth else None
+
+    # LONGITUDINAL PROFILE — energy fraction by depth bin, real vs gen. `pileup_generator_plan.md:356`
+    # names "layer-wise energy fractions, shower width/depth profiles" as acceptance criteria; they
+    # were never computable because preprocessing dropped the depth coordinate.
+    prof = None
+    if has_depth:
+        edges = np.array([-20, 0, 25, 50, 100, 200, 400, 800, 1e9])
+        rw = np.exp(ch[:, CH_LOGE]).astype(np.float64)
+        rh = np.histogram(r_depth, bins=edges, weights=rw)[0]; rh = rh / max(rh.sum(), 1e-12)
+        gh = np.histogram(gen_depth, bins=edges, weights=gen_E.astype(np.float64))[0]
+        gh = gh / max(gh.sum(), 1e-12)
+        prof = {f"{int(lo)}-{'inf' if hi > 1e8 else int(hi)}": [round(float(r), 4), round(float(gv), 4)]
+                for lo, hi, r, gv in zip(edges[:-1], edges[1:], rh, gh)}
+        print("\nlongitudinal profile — energy fraction by depth [mm from front face]")
+        print(f"  {'bin':>12} {'real':>8} {'gen':>8} {'ratio':>8}")
+        for k, (r, gv) in prof.items():
+            print(f"  {k:>12} {r:>8.4f} {gv:>8.4f} {gv/max(r,1e-9):>8.3f}")
+        print(f"  energy-weighted mean depth: real {np.average(r_depth, weights=rw):.1f} mm  "
+              f"gen {np.average(gen_depth, weights=gen_E.astype(np.float64)):.1f} mm")
 
     # WHICH event feature carries the gate? A single-variable AUC per feature (sign-agnostic)
     # says what to fix next; the composite AUC alone never does.
     per_feat = {}
-    for j, nm in enumerate(FEATURE_NAMES + WIDTH_FEATURE_NAMES):
+    for j, nm in enumerate(FEATURE_NAMES + WIDTH_FEATURE_NAMES
+                           + (DEPTH_FEATURE_NAMES if has_depth else [])):
         a = rank_auc(np.concatenate([Xr[:, j], Xg[:, j]]), y)
         per_feat[nm] = round(float(max(a, 1 - a)), 4)
 
@@ -315,6 +380,8 @@ def main():
            "over_etrue_frac_real": round(float((r_Ereco > E_true).mean()), 6),
            "event_gate_auc": round(float(auc), 4),           # 8 energy/multiplicity features (historical)
            "event_gate_auc_width": round(float(auc_w), 4),   # + per-shower width mean/std
+           "event_gate_auc_depth": (round(float(auc_d), 4) if auc_d is not None else None),
+           "longitudinal_profile": prof,   # {depth bin: [real, gen]} energy fractions
            "gate_auc_per_feature": per_feat,
            "wasserstein_over_std": {k: round(v, 4) for k, v in wnorm.items()},
            "energy_response": response, "speed": speed}
