@@ -42,14 +42,20 @@ $MAMBA_EXE run -n genpu2 python <script>
 - `particles`: kinematics + `vx,vy,vz` (production vertex), `energy`, `primary` flag, `parent_id`.
 
 ### Preprocessed stage2 (training-ready npz)
-`/scratch/gpfs/IOJALVO/lv7805/genpu_data/preprocessed/shard_XXXX_stage2.npz` (6 shards).
+`/scratch/gpfs/IOJALVO/lv7805/genpu_data/preprocessed/shard_XXXX_stage2.npz` — **4 shards,
+numbered 0, 1, 2 and 5** (3 and 4 were never preprocessed; verified 2026-08-24. Shard 5 is
+the held-out one used by the metric suite).
 Flat arrays + offsets (CSR-style; hit `i` of particle `p` is `flat[offset[p]:offset[p+1]]`):
 - `particle_features (N,6)` = **[logpt, eta, phi, pdg_class, charge, mass]**
 - `particle_aux (N,6)`      = **[primary, parent_id, vx, vy, vz, energy]**
 - `tracker_hits_flat (M,5)` = **[layer_class(0..47), r, phi, z, time]** — note: preprocessing
   collapses `(volume,layer)` → one of **48 layer classes** and **drops `surface_id`**.
 - `calo_hits_flat`, `calo_offsets`, `tracker_offsets`, `event_ids`.
-- Hits are pre-sorted **inner→outer (r-ascending)** within each particle.
+- **Hit order in stage2 is ARBITRARY** (grouped by `particle_id`, not sorted). Verified
+  2026-08-24: Spearman(index, r) = 0.01, ~50% of steps decrease in r, median max drop 158 mm.
+  The **r-ascending (inner→outer) sort happens in `build_tracker_slice.py:85`**, so it holds for
+  the tracker SLICES only. Anything reading `tracker_hits_flat` directly must sort by r itself —
+  "the last stored hit" is NOT the outermost hit.
 - Column-index constants live at the top of the tracker scripts (`PF_*`, `AUX_*`, `TH_*`).
 
 ### Tracker training slices

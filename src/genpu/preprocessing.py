@@ -26,6 +26,7 @@ from genpu.data import (
     build_event_index,
     compute_eta_phi,
 )
+from .detector_geometry import hits_to_layer_class
 
 
 # PDG class mapping: group ~4000 PDG codes into a small set of classes
@@ -134,8 +135,16 @@ def process_event_vectorized(
     trk_r = np.sqrt(trk_x**2 + trk_y**2)
     trk_phi = np.arctan2(trk_y, trk_x)
 
-    # Stack into (n_tracker_hits, 6): r, phi, z, time, volume_id, layer_id
-    trk_features = np.stack([trk_r, trk_phi, trk_z, trk_time, trk_vol, trk_layer], axis=1)
+    # Stack into (n_tracker_hits, 5): layer_class, r, phi, z, time.
+    # NOTE 2026-08-24: this file previously emitted 6 columns (r, phi, z, time, volume_id,
+    # layer_id), which does NOT match the stage2 npz the whole training pipeline reads
+    # (5 columns, col 0 = layer_class 0..47, verified against shard_0000). Every slice builder
+    # indexes TH_LAYER=0, TH_R=1, ... so a re-run with the old columns would have silently
+    # produced unusable data. (volume, layer) -> layer_class is the documented collapse in
+    # detector_geometry.hits_to_layer_class, which this module was never calling.
+    trk_layer_class = hits_to_layer_class(
+        trk_vol.astype(np.int64), trk_layer.astype(np.int64)).astype(np.float32)
+    trk_features = np.stack([trk_layer_class, trk_r, trk_phi, trk_z, trk_time], axis=1)
 
     # Sort tracker hits by particle_id for fast grouping
     trk_sort = np.argsort(trk_pid)
@@ -198,7 +207,7 @@ def process_event_vectorized(
         if n_trk > 0:
             tracker_hit_list.append(trk_features_sorted[lo:hi])
         else:
-            tracker_hit_list.append(np.empty((0, 6), dtype=np.float32))
+            tracker_hit_list.append(np.empty((0, 5), dtype=np.float32))
 
         # Calo: binary search in sorted flat table
         lo_c = np.searchsorted(flat_calo_pid_sorted, pid, side="left")
@@ -284,7 +293,8 @@ def process_shard(
     # Stage 2 accumulators (per visible particle)
     all_particle_features = []
     all_particle_aux = []
-    all_tracker_hits = []    # list of (n_hits, 6) arrays
+    all_particle_ids = []
+    all_tracker_hits = []    # list of (n_hits, 5) arrays
     all_calo_hits = []       # list of (n_hits, 5) arrays
     all_event_ids_s2 = []
 
@@ -345,10 +355,13 @@ def process_shard(
         # Stage 2: per-particle flat hits
         all_particle_features.append(vis_features)
         all_particle_aux.append(vis_aux)
+        # own particle_id, so (event_id, particle_id) keys the parent->child graph downstream.
+        # particle_aux carries parent_id but WITHOUT this the graph cannot be rebuilt at all.
+        all_particle_ids.append(result["particle_ids"][vis_idx].astype(np.int64))
         all_event_ids_s2.append(np.full(n_vis, eid, dtype=np.int32))
 
         for j in vis_idx:
-            all_tracker_hits.append(result["tracker_hits"][j])  # (n, 6) or (0, 6)
+            all_tracker_hits.append(result["tracker_hits"][j])  # (n, 5) or (0, 5)
             all_calo_hits.append(result["calo_hits"][j])        # (n, 5) or (0, 5)
 
     # ── Save Stage 2: flat with offsets ──
@@ -360,7 +373,7 @@ def process_shard(
         # Build tracker offset array
         trk_lengths = np.array([h.shape[0] for h in all_tracker_hits], dtype=np.int32)
         trk_offsets = np.concatenate([[0], np.cumsum(trk_lengths)]).astype(np.int32)
-        trk_flat = np.concatenate(all_tracker_hits) if trk_offsets[-1] > 0 else np.empty((0, 6), dtype=np.float32)
+        trk_flat = np.concatenate(all_tracker_hits) if trk_offsets[-1] > 0 else np.empty((0, 5), dtype=np.float32)
 
         # Build calo offset array
         cal_lengths = np.array([h.shape[0] for h in all_calo_hits], dtype=np.int32)
@@ -377,6 +390,7 @@ def process_shard(
             calo_hits_flat=cal_flat,
             calo_offsets=cal_offsets,
             event_ids=eids,
+            particle_ids=np.concatenate(all_particle_ids),
         )
 
     # ── Save Stage 1: flat with offsets ──

@@ -2,7 +2,7 @@
 
 Rolling state. Append-only detail lives in `experiment-memory/`. See also `TRACKER_GATE_FINDINGS.md`.
 
-_Last updated: 2026-08-14_
+_Last updated: 2026-08-24_
 
 ## Current best
 - **Tracker: v3 surface-local + scheduled sampling BEATS the v1 deliverable.** Honest full-event
@@ -14,6 +14,93 @@ _Last updated: 2026-08-14_
 - **Count head**: self-normalizing fix (`count_head_d0_selfnorm.pt`); "undercount" was a norm mismatch.
 - **Documented v1 deliverable** (separate setup): multispecies honest full-event gate **0.77** (base-8),
   ckpt `multispecies_vertex_512bin/checkpoint_070000`. Not yet re-contested by v3 (v3 is pion-only so far).
+
+## SUBSYSTEM VISIBILITY (2026-08-24) — read before any incidence / cross-subsystem work
+[Census entry](experiment-memory/2026-08-24-subsystem-visibility-census.md) ·
+`scripts/subsystem_visibility.py` · real data, no model.
+- **The tracker has the SAME missing-incidence hole as the calo, and it is bigger.** Both slice
+  builders filter to `n >= 1` (`build_count_slice_stage2.py:24`, `build_tracker_slice.py --min_hits`)
+  and `CountHead` is a categorical over **1..48**, so it structurally cannot emit zero. Tracker
+  zero-trace **59.6%** vs calo **31.3%** (shard 0, among particles visible somewhere —
+  `preprocessing.py:223` already dropped the fully invisible).
+- **Only 9.2% of particles are seen by BOTH subsystems** (trk-only 0.313 / calo-only 0.596 /
+  both 0.092 / neither 0.000). The population-level reason the tracker->calo edge came out
+  anti-complementary: the two subsystems see **near-disjoint populations**.
+- **The outcome is ~94% deterministic** (depth-8 tree, baseline 0.595; depth-16 0.961), driven by
+  **log_E 0.53** > |vz| 0.17 > pdg_class 0.14 > vr 0.08. Species alone is a WEAK predictor
+  (per-species purity ~0.5); what separates outcomes within a species is energy and production
+  vertex — charged born vr > 1100mm is calo-only at **0.986**.
+- **The residual ~5% is the conversion/interaction coin flip**, i.e. physics a generator should
+  SAMPLE, not predict. Photons: P(trk | charged daughter) **0.185** vs P(trk | none) **0.001**
+  (factor ~200); pi0/K0L/K0S/nbar flat **0.000**. Neutrons invert it (0.576 with NO daughter) —
+  unresolved. Photon hits are real isolated deposits (median **1 hit**), 75% distinct from the
+  daughters' hits, not double-booking.
+- **No decay head.** `pileup_generator_plan.md:359-379` already ruled it out: genuine decays are a
+  minority, secondary production is material-dominated, and injection is a GENERATION-TIME concern —
+  training conditions on truth particles that already contain every conversion daughter. The
+  conversion is an INPUT. The useful object is `P(leaves trace | E, eta, vr, pdg, has-chg-daughter)`.
+  **Scope caveat**: that holds for TRUTH-conditioned response only. Sampling novel particles needs
+  the cascade generator (conversion/brem/nuclear, ~96% of secondary production) — already spiked
+  and validated, see the Cascade section above. Decays specifically stay a ~4% analytic add-on.
+- **BLOCKER**: stage2 stores `parent_id` but NOT the particle's own id, so the parent->child graph
+  cannot be rebuilt downstream (`preprocessing.py:233` has `particle_ids`, never writes it to the
+  npz). One-line fix; unlocks the strongest neutral feature.
+- **Methodology**: the first version of this probe joined by row index (agreement **0.000**) and
+  produced a flat, physically impossible ~12% tracker rate for pi0. The script now prints a
+  wrong-event NULL column so the failure is visible. `preprocessing.py` joins correctly.
+
+## CASCADE / SECONDARY GENERATION (Jul 8, RECOVERED into STATUS 2026-08-24)
+[scoping_secondary_cascade.md](scoping_secondary_cascade.md) · commits 9290678..f164d05 · spike
+artifacts in `/scratch/gpfs/IOJALVO/lv7805/genpu_data/cascade/`. **This line was validated and then
+fell out of the rolling state**; it is the answer to "can we generate NEW particles, not just
+respond to truth ones".
+- **The gap it names**: 91.6% of particles are secondaries, and **61.4% of tracker hits + 84.4% of
+  calo hits/energy come from secondaries** (material effects, r=20-1100mm; decays only ~4%). Truth-
+  conditioned input hands over most of the response — fine for the current deliverable, but it does
+  NOT support sampling a novel particle, whose daughters would be missing.
+- **Option C is FORCED by data, not chosen.** `any_daughter_frac == conv_frac` in every energy bin
+  and **90% of high-E photons have NO daughter particles** — their shower is recorded as calo HITS,
+  not a particle tree. So: **calo absorbs its cascade inclusively** (per-incident particle; there are
+  no daughters to generate), **tracker needs an explicit secondary-track model** (clean particle-
+  generation problem; the crux and highest-risk piece), analytic decays a cheap ~4% add-on.
+- **Both hard cases SPIKED AND MATCHED** with cond-only models. Photon conversion: convert_frac
+  0.6153 → **0.6148**, log_conv_r mean/std 6.073/1.030 → **6.072/1.027**, and the non-monotone
+  convert-vs-E curve including the high-E collapse (0.104 → 0.100); `esplit` 0.711 → 0.678 is soft.
+  Pion nuclear: interact_frac 0.4384 → **0.4391**, multiplicity matched bin-by-bin (mean 3.073 →
+  3.085), log_int_r 5.707 → 5.733.
+- **Loop CLOSED for conversions**: generated e± vs truth e± through the SAME tracker head give
+  layer_class 20.4 vs 19.2, frac_inner 21.6% vs 23.8%, hit radius 304 vs 285 mm — the generated
+  cascade reproduces truth HIT placement, not just particle statistics. Caveats: fixed n_hits (tests
+  placement not count), gen emits 2 e± vs truth's ~1.5 recorded, collinear-direction approximation.
+- **Sequencing (unchanged, still correct)**: do NOT build the cascade generator until the per-detector
+  heads are solid and M3 assembly works on truth input. M3 has no section here yet, so cascade stays
+  deferred — the spikes de-risked it, they did not promote it to a component.
+- **Consistent with the 2026-08-24 census**: calo-only is 59.6% of particles and only 9.2% are seen
+  by both subsystems, i.e. most calo energy arrives from particles the tracker never saw — the calo
+  cascade really does live in hits, not in the particle list.
+
+### DIRECTION SET 2026-08-24 — primaries-in with a LEARNED cascade
+[Entry](experiment-memory/2026-08-24-cascade-depth-and-primaries-in-scoping.md).
+- **The cascade is SHALLOW**: depth 0/1/2/3 carry 40.5 / 35.7 / 13.7 / 6.6% of tracker hits, so
+  **3 levels = 96.5%, 4 = 99%**; 3.3 particles per primary. Each level is **fully batchable**
+  (all depth-k particles in one call), so sequential depth is ~4 regardless of event size.
+- **But the SPEED case for learning the tracker cascade is weak** — Geant4's cost is dominated by
+  CALO shower development, which the ML calo head already replaces. The tracker cascade is the cheap
+  part. Fatras is not "slightly faster Geant4": simplified surface geometry, parameterized material
+  effects at surface crossings, and **no calo showers at all**. **The case for primaries-in is
+  ARCHITECTURAL** (self-contained generator, no external geometry dependency), not throughput —
+  know this before it goes in a paper. Fatras retained as a **validation target**, not discarded.
+- **Both spikes only validated ONE level** (direct daughters = 76% of hits). Depth 2-4 and **error
+  compounding across levels** are untested — the same failure mode the tracker head already has
+  (v3 needed scheduled sampling), as the scoping doc predicted.
+- **Conditioning gaps**: `build_conversion_slice.py:54` uses `[log_E, eta, vr, vz]` — **no phi** (the
+  material map is learned phi-averaged; untested for ODD), and for CHARGED parents the material
+  integral is a helix-path quantity that a production-point proxy does not capture.
+- **PRIMARY FRACTION — RESOLVED, M0's number was wrong**: **~27% primaries** (`primary` flag), not
+  8.4%. **Every** particle carries a `parent_id` (range 0..6295; `parent_id <= 0` is 0.000), so M0's
+  "has a parent" secondary test is TRUE for ~100% and does not measure what it claims. The cascade
+  must generate ~73% of the list, a **3x SMALLER** job than "91.6% of particles are secondaries"
+  implied — a claim that appears in `pileup_generator_plan.md:363` and should be re-read.
 
 ## Active hypothesis
 The v1 outward drift is a representation artifact (unbounded ±60 mm layer residual); surface-local
@@ -53,6 +140,25 @@ compounds outward). Fix under test: **scheduled sampling** (train on own history
 - **Multi-species head** (`multispecies_v1`, one PDG-conditioned model, all 17 classes, 60k steps):
   per-species held-out gates γ 0.681, π 0.870, e- 0.888, e+ 0.887, p 0.749, rest 0.626. Covers
   everything; shared capacity costs per-species fidelity (γ 0.557→0.681) — capacity is the open question.
+
+## CALO SHOWERS ARE OVER-SPLIT (2026-08-24) — candidate mechanism for the standing e± problem
+[Entry](experiment-memory/2026-08-24-calo-shower-oversplitting.md) · measurement only, **hypothesis
+UNTESTED** (no retrain run).
+- `build_calo_slice.py` groups by `calo_offsets` = **per direct depositing particle**. But **64.8% of
+  calo depositors were born INSIDE the calorimeter** (past the front face r>1259mm / |z|>3212mm),
+  carrying **54.2% of all calo cells**. Those are shower FRAGMENTS trained as showers, with
+  "incident kinematics" that are really mid-shower kinematics.
+- **The species ordering tracks the calo difficulty ordering**: γ **0.1%** split (gate **0.557**, best
+  on record) · π± ~56% (0.809) · e± **74.2%** (0.888 ms / 0.773 dedicated) · p 87.3% (0.749).
+- This supplies a mechanism for a line elsewhere in this file that blames intrinsic difficulty —
+  "e± ... wide production-radius spread" **IS** the over-splitting (e± born at varying calo depths).
+- **Counter-evidence, stated plainly**: proton is 87.3% split yet gates better than e±. It deposits a
+  median 3 cells so plausibly a different regime, but the correlation is NOT clean and this is not proof.
+- **The fix is half of Option C** (calo-inclusive) and is needed for Pythia-input generation anyway:
+  re-attribute each cell to its **calo-incident ancestor**, rebuild slices, retrain, gate — **2 seeds
+  minimum**. BLOCKED on `preprocessing.py` storing `particle_ids`.
+- **If it moves the gate**, every calo result since 2026-08-13 was measured through a confounded
+  training target and the `frac_near_floor` / n=1 thread must be re-read in that light.
 
 ## Calo metric CHANGED 2026-08-13 — the gate now has a width variant (read this first)
 `calo_metrics.py` reports **two** AUCs: `event_gate_auc` (the historical 8 energy/multiplicity
@@ -195,11 +301,14 @@ explicitly). See [0c entry](experiment-memory/2026-08-13-phase0c-separate-trunks
    vertex kinematics; same frame-change class as v3 surface-local and the v4 helix anchor. Truth
    conditioning only. Pre-check answered: 16.5x (pion) φ tightening on the face-reaching population,
    2.4x on the curler population via the turning-point branch.
-4. **Then the novel step — condition the calo on the GENERATED TRACK's outer state** (scattering,
-   energy loss, early stopping a helix can't know). Evaluate with real vs generated tracks to
-   separate information gain from exposure bias. Not found in the calo literature (which generates
-   single-particle showers conditioned on truth); would also make the incidence problem physical
-   (whether a particle deposits ≈ whether its track survives the tracker).
+4. ~~**Condition the calo on the GENERATED TRACK's outer state**~~ — **FALSIFIED 2026-08-16 on real
+   data, before any training.** 81% of pion / 93% of e± curlers leave **zero tracker hits**, and e±
+   have essentially none in any branch (86-98% empty). Tracks exist exactly where the helix already
+   works (face branches, 15-24x) and are absent where it is weak (curlers, 2.5x) — anti-complementary.
+   See "Ruled out" and the [entry](experiment-memory/2026-08-16-curler-tracker-coverage-PHASE4-FALSIFIED.md).
+   Surviving scope is narrow: a last-hit **position + direction** extrapolation for face-reaching
+   **pions** only (endcap 76% coverage, median 9 hits), where the helix already gets 15-24x. No
+   longer the project's novelty claim.
 
 ## Active calo hypothesis — SUPERSEDED for e± by Phase 1 (2026-08-14)
 The core-is-the-defect diagnosis below stands, and the helix anchor acted on it: **e± per-bin core
@@ -248,10 +357,13 @@ pion/proton weak spot (W/σ 0.32/0.33 vs photon 0.11). Needs a width feature to 
   the working tree only. Needs a commit before it's truly safe/reproducible.
 
 ## Open threads
-- **Turning-point anchor is a proxy, not the physics**: 63% of pion / 72% of e± calo showers are
-  energy booked to a parent that never reached the calo (soft, born deep in the tracker). That is
-  exactly the population **Phase 4** (track-conditioned calo) should own — the generated track knows
-  where the particle actually stopped. Revisit the branch there.
+- **Turning-point anchor is a proxy, and 2026-08-16 showed there is NO better one available**: 63% of
+  pion / 72% of e± showers are energy booked to a parent that never reached the calo, and those
+  particles leave zero tracker hits 81% / 93% of the time — so Phase 4 cannot own that population.
+  Its ~2.5x is the ceiling unless something other than the tracker supplies the stopping point.
+  (Also measured: the vacuum turning point's φ is **uncorrelated** with the real outermost hit's φ —
+  |Δφ| median 1.567 rad ≈ π/2, the uniform value — so its 2.4x gain is not φ agreement with the
+  actual track.)
 - **Fix v4's 18.5% tail** (low-pT curly outer hits) to get coherence AND marginals: hybrid reference
   (layer-mean fallback where the arc-length march is unreliable) or nonlinear deviation bins.
 - **Reco-level eval**: does coherence actually matter downstream? Decides v4 (coherent) vs v3-ms
@@ -262,11 +374,21 @@ pion/proton weak spot (W/σ 0.32/0.33 vs photon 0.11). Needs a width feature to 
   anchor could close it. Low priority.
 - **Helix anchor** (optional): physics-guaranteed no compounding + reco-fidelity bonus; SS already
   did most of the work, so this is now a refinement, not a necessity.
-- **Calo incidence head MISSING** — every calo slice/model/gate is conditioned on `n_cells >= 1`, i.e.
-  P(shower | deposits), never P(deposits | particle); only 68.7% of particles deposit and the rate is
-  species-dependent (e- 50%, e+ 95%, n 35%, K0L 100%). Logistic probe on the standard contract already
-  gets AUC 0.897 (`scripts/calo_incidence_probe.py`). Blocks an honest full-event calo gate; the calo
-  analogue of the tracker count head.
+- **Incidence head MISSING on BOTH subsystems** (upgraded 2026-08-24 from "calo only") — calo is
+  conditioned on `n_cells >= 1` (68.7% deposit; e- 50%, e+ 95%, n 35%, K0L 100%) and the TRACKER is
+  conditioned on `n_hits >= 1` (only **40.4%** leave a hit). Blocks an honest full-event gate on both.
+  Now the cheapest open item: the 3-way outcome is **94% predictable** from truth kinematics and the
+  residual ~5% is the conversion coin flip, which the generator should sample. Existing calo logistic
+  probe already gets AUC 0.897 (`scripts/calo_incidence_probe.py`).
+  See [census](experiment-memory/2026-08-24-subsystem-visibility-census.md).
+- **Stage2 cannot rebuild the parent->child graph** — `particle_aux` carries `parent_id` but the
+  particle's own id is never written (`preprocessing.py:233`). One-line fix; unlocks
+  "has charged daughter", which moves photon P(tracker hit) 0.001 -> 0.185.
+- **Neutron tracker visibility unexplained** — 48% have tracker hits, and NOT via recorded charged
+  daughters (P(trk | daughter) 0.070 vs P(trk | none) 0.576). Probably sub-threshold nuclear recoil.
+- **The tracker's modelled population is majority stubs** — 44.7% of charged particles with >= 1 hit
+  have exactly ONE (median 2), plus photon single deposits (median 1 hit, real not double-booked).
+  Whether isolated deposits belong in the tracker slice at all has never been asked.
 - **Multi-species calo capacity — PARTIAL lever, quantified**: a dedicated e± head (2 classes, same
   data/steps) gives e- **0.773** / e+ **0.760** vs the shared head's 0.888/0.887, so capacity is worth
   ~0.12 — but it does NOT reach photon-like 0.56, i.e. e± are intrinsically harder than photons
@@ -320,11 +442,92 @@ worse, and it does NOT rescue the separate-trunks damage. Flag stays opt-in.
 See [falsification entry](experiment-memory/2026-08-14-anchor-cond-separate-trunks-FALSIFIED.md)
 and [the log_n result](experiment-memory/2026-08-14-energy-head-logn-PARTIAL.md).
 
+## THE ENERGY-HEAD TARGET IS NOW PRECISE (2026-08-16) — p(floor | n) at small n
+[Entry](experiment-memory/2026-08-16-floor-iid-test-FALSIFIED-and-n-dependence.md) · job 12470841 ·
+`scripts/calo_floor_dispersion.py`. The Aug-14 multiplicity diagnosis was right in MECHANISM and
+wrong in TARGET. It is not "tell the energy head n" (`--energy_glob_idx 1`, worth 0.618 → 0.574);
+it is that **p(floor) must be an explicit, strongly NON-LINEAR function of n**:
+- **e±: the entire error is at n = 1.** Real p(floor) **0.011** (e−) / 0.009 (e+), generated
+  **0.061 / 0.062** — a **6x excess** over ~8% of showers each. By n ≥ 9 real and gen agree to 0.001.
+  Physically obvious: a one-cell shower's cell carries the ENTIRE shower energy, so it cannot be a
+  faint fringe cell. A single `log_n` scalar into an MLP dominated by large-n showers under-fits
+  exactly that corner.
+- **Pion: no n-dependence at all.** Real p climbs 0.018 → 0.032 with n; generated is flat ~0.018.
+  Its defect is a MISSING SLOPE, not a small-n corner — same fix, different reason.
+- Cells-per-shower itself is fine (pion 15.57 real / 15.72 gen; e− 10.50 / 10.52), so `log_n` is not
+  the problem — what the head does with it is.
+- **Free first probe: the `partition` A/B.** All logged runs use `--no_partition`; with partition ON
+  cells renormalise to the sampled total, which for n = 1 *forces* the cell to carry `total_logE` and
+  would fix the e± defect by construction. Partition was ruled out 2026-08-13 on the POOLED
+  `cell_logE` marginal — never checked at small n.
+
+### The floor-Bernoulli-on-n fix FAILED its own target (2026-08-16, job 12473556)
+`--floor_n_buckets 32` (at-floor logit gets its own net + an embedding of the shower cell count)
+moved p(band | n=1) by **0.003** (e− 0.061 → 0.058 vs real 0.011). **The attribution was wrong.**
+`EnergyHead`'s Bernoulli models only the NARROW pile (`|logE−log_floor| < 0.05`), while
+`frac_near_floor` scores a WIDE band (`logE < log_floor + 0.5`) that is *also* fed by every low
+**mixture** draw — including the sub-floor tail `EnergyHead.loss` deliberately leaves to the mixture.
+If the excess is mixture-tail, no Bernoulli change can reach it (and that is why `partition`, which
+rescales cell energies, could). Decomposition running as job 12526752.
+See [the entry](experiment-memory/2026-08-16-floor-n-buckets-PARTIAL-mechanism-untouched.md).
+
+### SETTLED 2026-08-24 (job 12526752) — mixture tail, and the gate gain was SEED NOISE
+[Entry](experiment-memory/2026-08-24-floor-band-decomposition-and-seed-replicate.md).
+- **The n=1 excess is the MIXTURE's sub-floor tail, not the Bernoulli.** e− at n=1, real/gen:
+  sub-floor **0.0019 / 0.0368** (19x, ~90% of the excess), pile 0.0007 / 0.0054, just-above
+  0.0086 / 0.0184. Matched to ~0.001 by n >= 5. So no Bernoulli change could ever have reached it,
+  and `--floor_n_buckets` is **ABANDONED**.
+- **The e± gate gain did not replicate.** Arm B seed 1: e− gate8 **0.8272**, e+ **0.8133** — worse
+  than the Phase 1 baseline (0.7456 / 0.7488) and 0.11 away from seed 0 (0.7204 / 0.7015).
+- **SEED SPREAD ON e± gate8 IS ~0.11.** Every single-run gate delta on record smaller than that is
+  uninterpretable — which covers most of the 2026-08-14 sequence. **Two seeds minimum from here.**
+- **Exact remaining target**: the Gaussian mixture's lower tail at **n = 1 for e±**. At n=1 the cell
+  carries the ENTIRE shower energy, so the correct constraint is a BOUND (`cell_logE == total_logE`),
+  not a bucket. `partition` enforced that globally — right at n=1, catastrophic elsewhere. **An
+  n=1-only constraint is the untried version.**
+
 **Anchor conditioning is confirmed robust and trunk-independent on its own target**: e± physical core
 mechanism 1.275 → **1.00**, pion 0.929 → **1.02**, branch ratios → ~0.8-1.0, at identical
 val_cfm/val_gnll. The only thing between it and a shipped win is the floor fraction above.
 
 ## Ruled out
+- **`--floor_n_buckets` (floor Bernoulli on a cell-count embedding)** — mechanism untouched (0.003)
+  and its apparent e± gate gain did not survive a `--seed 1` replicate (0.7204 -> **0.8272**).
+  Flag stays opt-in at 0. Job 12526752,
+  [2026-08-24](experiment-memory/2026-08-24-floor-band-decomposition-and-seed-replicate.md).
+- **A DECAY head** — not indicated in the current truth-conditioned scope: conversion daughters are
+  already in the input particle list, genuine decays are a minority of secondary production, and
+  injection is a generation-time concern (`pileup_generator_plan.md:359-379`). The incidence head
+  is the object that is actually missing.
+  [2026-08-24](experiment-memory/2026-08-24-subsystem-visibility-census.md).
+- ~~**Track-endpoint anchor / Phase 4 for the CURLER population**~~ — **REOPENED 2026-08-24, the
+  premise was contaminated.** The logged "81% (pion) / 93% (e±) of curlers have zero tracker hits"
+  pooled two unrelated populations: the turning-point branch is **81-92% particles born INSIDE the
+  calorimeter** (endcap shower fragments at vr ~ 420 mm but |vz| > 3212 mm), which have no tracker
+  hits by construction. For **genuine tracker-born curlers, 95.5% of pions and ~77% of e± DO leave
+  tracker hits**. This does NOT show Phase 4 works — Q3 has never been measured on the clean
+  population — only that the reason for dismissing it was invalid, and the door it reopens is
+  narrower (true curlers are 18.7% of the pion branch, ~8% of e±). Jobs 12874732 / 12874782,
+  [2026-08-24](experiment-memory/2026-08-24-turning-branch-contamination-phase4-REOPENED.md).
+  **RESETTLED same day (job 12878141)** — Q3 measured on the clean population at last: the
+  track endpoint buys only **1.16x (pion) / 1.20x (e±) in eta and NOTHING in phi**, vs the
+  helix's 15-24x on face branches — and that is an UPPER BOUND, using the real truth endpoint
+  rather than a generated one. **Stays unbuilt**, now for a supported reason. Two facts worth
+  keeping: e± coverage is **complementary**, not anti-complementary (face branches 86-96%
+  EMPTY, curler branch 77% tracked — the reverse of what was logged), and pion curlers are
+  95.6% tracked with a median 11 hits.
+  [Q3 clean](experiment-memory/2026-08-24-q3-clean-phase4-resettled.md).
+- **`partition` as the n=1 floor fix** — MECHANISM CONFIRMED, DELIVERY REJECTED. Forcing the single
+  cell to carry the total lands e− n=1 exactly on truth (0.061 → **0.011** vs real 0.011), proving
+  the physical reading — but it rescales every cell's continuous energy: n ≥ 2 gets worse on every
+  species (pion n=4 0.016 → 0.053 vs real 0.022), the generated floor count becomes OVER-dispersed
+  (D 1.03 → **3.81** pion), and pooled `cell_logE` 0.0223 → **0.309**, gate8 0.8055 → **0.9977**.
+  Job 12471293, [2026-08-16](experiment-memory/2026-08-16-partition-AB-mechanism-confirmed-delivery-rejected.md).
+- **"Cells need to know about each other" as the `frac_near_floor` lever** (set model / correlation
+  latent) — real showers are barely over-dispersed at all: `D_floor` real **1.035** (e±) / 1.199
+  (pion) vs an i.i.d. floor of 1.000, so there is nothing for cell coupling to buy. The positive
+  control inverted too (real AND gen width over-dispersed 3-16x, gen *more* than real). Job 12470841,
+  [2026-08-16](experiment-memory/2026-08-16-floor-iid-test-FALSIFIED-and-n-dependence.md).
 - **energy head on `log_n`** (`--energy_glob_idx 1`) as a GATE lever — improves its target on every
   species and is the best per-shower-energy setting on record, but loses the upper energy
   percentiles and nets slightly worse; recovers none of the separate-trunks damage.
