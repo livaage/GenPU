@@ -154,6 +154,11 @@ UNTESTED** (no retrain run).
   "e± ... wide production-radius spread" **IS** the over-splitting (e± born at varying calo depths).
 - **Counter-evidence, stated plainly**: proton is 87.3% split yet gates better than e±. It deposits a
   median 3 cells so plausibly a different regime, but the correlation is NOT clean and this is not proof.
+- **CORRECTED 2026-08-24 (job 12879425)**: cells have 1.21 contributors on average (89.3% single),
+  so the merged count above was summed rather than deduplicated — **e± cells/shower is ~17.9, not
+  20.72** (1.154x inflation). Direction and magnitude unchanged; any implementation must DEDUPLICATE.
+  Within-shower sharing 7.2% vs true superposition 3.5% — and that 3.5% is a **PU0 floor**, far
+  higher at M3's mu = 30-200. [entry](experiment-memory/2026-08-24-calo-cell-sharing-corrects-j3a.md)
 - **The fix is half of Option C** (calo-inclusive) and is needed for Pythia-input generation anyway:
   re-attribute each cell to its **calo-incident ancestor**, rebuild slices, retrain, gate — **2 seeds
   minimum**. BLOCKED on `preprocessing.py` storing `particle_ids`.
