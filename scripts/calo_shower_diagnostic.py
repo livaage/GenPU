@@ -27,7 +27,8 @@ def shower_features(pts, logE_col, counts):
     feats = []
     for s in range(len(counts)):
         a, b = off[s], off[s + 1]
-        deta, dphi, lE = pts[a:b, 0], pts[a:b, 1], pts[a:b, 2]
+        # energy is the LAST column: a v2 slice is (P,4) with DEPTH at index 2
+        deta, dphi, lE = pts[a:b, 0], pts[a:b, 1], pts[a:b, -1]
         E = np.exp(lE); w = E / (E.sum() + 1e-12)
         cx = (w * deta).sum(); cy = (w * dphi).sum()
         rc = np.sqrt((deta - cx) ** 2 + (dphi - cy) ** 2)     # dist from energy centroid

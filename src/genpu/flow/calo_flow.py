@@ -244,7 +244,7 @@ class CaloFlow(nn.Module):
     """Shared conditioning + global/position/energy heads, with (un)standardisation buffers."""
 
     def __init__(self, norm, embed_dim=64, hidden_pt=256, use_pdg=True, log_floor=None,
-                 qt_z=None, qt_pos_x=None, qt_glob_x=None, qt_glob_mask=None,
+                 pos_dim=2, qt_z=None, qt_pos_x=None, qt_glob_x=None, qt_glob_mask=None,
                  energy_use_glob=True, logE_max=None, logE_max_pdg=None, width_norm=False,
                  ctx_pt_edges=None, ctx_loc=None, ctx_scale=None, ctx_mask=None,
                  separate_trunks=False, core_anchored=False, anchor_cond=False,
@@ -273,7 +273,11 @@ class CaloFlow(nn.Module):
         anchor_dim = ANCHOR_FEAT_DIM if anchor_cond else 0
         self.glob = GlobalHead(embed_dim=embed_dim, n_glob=int(len(norm["glob_mean"])), n_mix=8,
                                anchor_dim=anchor_dim)
-        self.points = PointCFM(embed_dim=embed_dim, hidden=hidden_pt)
+        # POSITION DIMENSIONALITY. v1 slices are (P,3) = (d_eta, d_phi, logE) -> pos_dim 2, and the
+        # calo model was 2D for that reason (see PIPELINE.md §5). v2 slices are (P,4) with the
+        # longitudinal coordinate, -> pos_dim 3. Default 2 keeps every existing checkpoint loadable.
+        self.pos_dim = int(pos_dim)
+        self.points = PointCFM(pt_dim=self.pos_dim, embed_dim=embed_dim, hidden=hidden_pt)
         # energy sees (total_logE, log_n) — the shower energy scale particle features can't predict
         # energy_glob_idx overrides energy_use_glob: e.g. [1] = log_n only (multiplicity, no scale)
         self.energy = EnergyHead(embed_dim=embed_dim, n_mix=4,   # extra component for the sub-floor tail
@@ -346,7 +350,8 @@ class CaloFlow(nn.Module):
         self.register_buffer("qt_z", torch.as_tensor(
             qt_z if qt_z is not None else torch.linspace(-4.0, 4.0, K), dtype=torch.float32))
         self.register_buffer("qt_pos_x", torch.as_tensor(
-            qt_pos_x if qt_pos_x is not None else torch.zeros(K, 2), dtype=torch.float32))
+            qt_pos_x if qt_pos_x is not None else torch.zeros(K, self.pos_dim),
+            dtype=torch.float32))
         self.register_buffer("qt_pos_on", torch.tensor(1.0 if qt_pos_x is not None else 0.0))
         self.register_buffer("qt_glob_x", torch.as_tensor(
             qt_glob_x if qt_glob_x is not None else torch.zeros(K, G), dtype=torch.float32))
@@ -368,6 +373,12 @@ class CaloFlow(nn.Module):
             opts = dict(energy_glob_idx=sd["energy_glob_idx"].tolist())
         else:
             opts = dict(energy_use_glob=sd["energy.net.0.weight"].shape[1] > 64)
+        # POSITION DIMENSIONALITY, inferred like everything else here: PointCFM's final Linear
+        # outputs pt_dim, so its weight's first axis IS the position dimension. Absent on no
+        # checkpoint (the layer always exists), but guard anyway -> 2, the pre-2026-08-24 default.
+        _pn = [k for k in sd if k.startswith("points.net.") and k.endswith(".weight")]
+        opts = dict(opts, pos_dim=int(sd[sorted(_pn, key=lambda k: int(k.split(".")[2]))[-1]].shape[0])
+                    if _pn else 2)
         opts.update(width_norm=bool(float(sd.get("width_norm", 0.0))) or len(norm["glob_mean"]) >= 5,
                     separate_trunks=any(k.startswith("cond_glob.") for k in sd),
                     core_anchored=bool(float(sd.get("core_anchored", 0.0))),
@@ -447,12 +458,12 @@ class CaloFlow(nn.Module):
     def std_pos(self, pos):
         if bool(self.qt_pos_on > 0):
             return self._qt_fwd(pos, self.qt_pos_x)
-        return (pos - self.pts_mean[:2]) / self.pts_std[:2]
+        return (pos - self.pts_mean[:self.pos_dim]) / self.pts_std[:self.pos_dim]
 
     def unstd_pos(self, p):
         if bool(self.qt_pos_on > 0):
             return self._qt_inv(p, self.qt_pos_x)
-        return p * self.pts_std[:2] + self.pts_mean[:2]
+        return p * self.pts_std[:self.pos_dim] + self.pts_mean[:self.pos_dim]
 
     def anchor_feats(self, anchor, anchor_mode):
         """(S,2) anchor + (S,) branch code -> (S, ANCHOR_FEAT_DIM) GlobalHead conditioning.

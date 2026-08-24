@@ -83,6 +83,7 @@ def main():
           f"reattribute={not a.no_reattribute}  anchor={a.core_anchor}", flush=True)
 
     C, G, PTS, LAY, OFF, PDG, ANC, AMODE, NSRC = [], [], [], [], [0], [], [], [], []
+    EVID, PPHI, ETRUE = [], [], []   # metrics need these; cont excludes phi by contract
     for sh in a.shards:
         s2 = np.load(Path(a.preproc_dir) / f"shard_{sh:04d}_stage2.npz")
         pf, aux = s2["particle_features"], s2["particle_aux"]
@@ -189,6 +190,7 @@ def main():
         a_vr = np.hypot(g["vx"][arows], g["vy"][arows])
         a_cls = pdg_to_class(g["pdg_id"][arows].astype(np.int64)).astype(np.float32)
         a_q, a_m, a_vz = g["charge"][arows], g["mass"][arows], g["vz"][arows]
+        a_ev, a_E = g["event_id"][arows], g["energy"][arows]
 
         c_eta_all, c_phi_all = hits_a[firsts, CH_ETA], hits_a[firsts, CH_PHI]
         dep_all, lay_all = depth_and_layer(hits_a[firsts, CH_DET], rz_a[firsts, 0],
@@ -223,6 +225,7 @@ def main():
             PDG.append(float(a_cls[k]))
             ANC.append([float(AE[k]), float(AP[k])]); AMODE.append(int(AM[k]))
             NSRC.append(int(nsrc[k])); OFF.append(OFF[-1] + n)
+            EVID.append(int(a_ev[k])); PPHI.append(p_phi); ETRUE.append(float(a_E[k]))
 
     cont = np.asarray(C, np.float32); glob = np.asarray(G, np.float32)
     pts = np.concatenate(PTS).astype(np.float32); lay = np.concatenate(LAY).astype(np.int16)
@@ -231,6 +234,9 @@ def main():
     np.savez_compressed(out, cont=cont, pdg=np.asarray(PDG, np.float32), glob=glob,
                         points_flat=pts, point_layer=lay, offsets=off,
                         n_src=np.asarray(NSRC, np.int32),
+                        event_id=np.asarray(EVID, np.int32),
+                        p_phi=np.asarray(PPHI, np.float32),
+                        E_true=np.asarray(ETRUE, np.float32),
                         anchor=np.asarray(ANC, np.float32),
                         anchor_mode=np.asarray(AMODE, np.int8),
                         core_anchor=a.core_anchor, energy_mode="abs",

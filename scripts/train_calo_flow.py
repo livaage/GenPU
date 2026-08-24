@@ -171,12 +171,17 @@ def main():
         print(f"quantile normalise: pos dims [0,1], glob dims {np.where(qt_glob_mask>0)[0].tolist()}  K={K}")
     # sampling bounds for the energy head: the hardest cell seen in training, overall and PER
     # SPECIES (a multi-species slice's overall max comes from hadrons and is ~4x too loose for EM)
-    logE_max = float(pts[:, 2].max())
+    # pos_dim from the slice: (P,3)=v1 2D, (P,4)=v2 with depth. Energy is always the LAST column,
+    # so index -1 rather than a hard 2 -- that assumption is what would silently train on depth.
+    pos_dim = pts.shape[1] - 1
+    print(f"points_flat {pts.shape} -> pos_dim {pos_dim}"
+          f"{'  (v2: includes longitudinal depth)' if pos_dim == 3 else ''}")
+    logE_max = float(pts[:, -1].max())
     from genpu.preprocessing import N_PDG_CLASSES
     pt_pdg_np = np.repeat(pdg.astype(np.int64), npt)
     logE_max_pdg = np.full(N_PDG_CLASSES, np.inf, np.float32)
     for c in np.unique(pt_pdg_np):
-        logE_max_pdg[int(c)] = pts[pt_pdg_np == c, 2].max()
+        logE_max_pdg[int(c)] = pts[pt_pdg_np == c, -1].max()   # LAST column = energy; index 2 is DEPTH under v2
     width_norm = bool(int(d["width_normalized"])) if "width_normalized" in d else False
     # Phase 1: the slice decides the core frame; the model just records it so the generation path
     # knows it must be handed the anchor.
@@ -194,7 +199,7 @@ def main():
                      logE_max=logE_max, logE_max_pdg=logE_max_pdg, width_norm=width_norm,
                      separate_trunks=args.separate_trunks,
                      core_anchored=core_anchored != "none", energy_glob_idx=args.energy_glob_idx,
-                     floor_n_buckets=args.floor_n_buckets,
+                     floor_n_buckets=args.floor_n_buckets, pos_dim=pos_dim,
                      **anchor_kwargs, **qt_kwargs, **ctx_kwargs).to(dev)
     if core_anchored != "none":
         anc = d["anchor"]; amode = d["anchor_mode"]
@@ -218,8 +223,8 @@ def main():
     pdgT = torch.as_tensor(pdg, dtype=torch.long, device=dev)
     with torch.no_grad():
         globS = model.std_glob(torch.as_tensor(glob, dtype=torch.float32, device=dev))
-        posS = model.std_pos(torch.as_tensor(pts[:, :2], dtype=torch.float32, device=dev))
-    logE = torch.as_tensor(pts[:, 2], dtype=torch.float32, device=dev)
+        posS = model.std_pos(torch.as_tensor(pts[:, :pos_dim], dtype=torch.float32, device=dev))
+    logE = torch.as_tensor(pts[:, -1], dtype=torch.float32, device=dev)
     psh = torch.as_tensor(point_shower, device=dev)
     pt_contS, pt_pdg, pt_globS = contS[psh], pdgT[psh], globS[psh]
     # per-CELL cell count of the shower that cell belongs to, for the floor-vs-n head. Taken from the

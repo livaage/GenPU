@@ -71,8 +71,10 @@ def main():
         g_pts = np.concatenate([pos, logE[:, None].cpu().numpy()], axis=1)  # [d_eta,d_phi,log_ecell]
 
     starts = np.concatenate([[0], np.cumsum(g_n)])
-    e_point = np.exp(g_pts[:, 2]).astype(np.float32)
-    t_e = np.exp(t_pts[:, 2]).astype(np.float32)             # truth per-cell energy (GeV)
+    # energy is the LAST column in both: g_pts is [pos..., logE] (pos is 2D or 3D), and a v2
+    # slice's points_flat is (P,4) with depth at index 2.
+    e_point = np.exp(g_pts[:, -1]).astype(np.float32)
+    t_e = np.exp(t_pts[:, -1]).astype(np.float32)            # truth per-cell energy (GeV)
     g_totlogE = np.array([np.log(e_point[starts[s]:starts[s+1]].sum() + 1e-12)
                           for s in range(len(val))], np.float32)
 

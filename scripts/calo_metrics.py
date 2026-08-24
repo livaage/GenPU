@@ -55,6 +55,10 @@ def main():
     ap.add_argument("--pdg_class", type=int, nargs="+", default=[2])
     ap.add_argument("--shard", type=int, default=5, help="HELD-OUT shard (train used 0-2)")
     ap.add_argument("--preproc_dir", default="/scratch/gpfs/IOJALVO/lv7805/genpu_data/preprocessed")
+    ap.add_argument("--real_slice", default=None,
+                    help="v2 slice to use as the REAL reference instead of raw stage2. Required for "
+                         "any re-attributed model: stage2 gives one shower per DIRECT depositor, "
+                         "and 64.8%% of those are fragments born inside the calorimeter.")
     ap.add_argument("--steps", type=int, default=50)
     ap.add_argument("--batch", type=int, default=200000)
     ap.add_argument("--tag", default="photon")
@@ -121,16 +125,43 @@ def main():
           f"logE_max={float(model.logE_max):.3f}")
     model.eval()
 
-    d = np.load(Path(args.preproc_dir) / f"shard_{args.shard:04d}_stage2.npz")
-    pf, aux, ch, off, eid = (d["particle_features"], d["particle_aux"], d["calo_hits_flat"],
-                             d["calo_offsets"], d["event_ids"])
-    ncal = np.diff(off)
-    sel = np.where(np.isin(pf[:, PF_PDG], args.pdg_class) & (ncal >= 1))[0]
-    vr = np.hypot(aux[sel, AUX_VX], aux[sel, AUX_VY]); logE = np.log(np.clip(aux[sel, AUX_ENERGY], 1e-6, None))
-    cont = np.stack([pf[sel, PF_LOGPT], pf[sel, PF_ETA], logE, pf[sel, PF_CHARGE],
-                     pf[sel, PF_MASS], vr, aux[sel, AUX_VZ]], 1).astype(np.float32)
-    pdg = pf[sel, PF_PDG].astype(np.int64); p_eta, p_phi = pf[sel, PF_ETA], pf[sel, PF_PHI]
-    E_true = aux[sel, AUX_ENERGY].astype(np.float64)
+    # REAL REFERENCE. --real_slice reads a v2 slice, so shower ATTRIBUTION has exactly one
+    # implementation (build_calo_slice_v2.py) shared by training and evaluation -- the same reason
+    # calo_geom.py is shared so the training and generation frames cannot drift apart. Without it a
+    # v2-trained model would be scored against v1-attributed real showers (one per DIRECT
+    # depositor), which is not a subtle mismatch: 64.8% of v1 "showers" are fragments.
+    if args.real_slice:
+        sd = np.load(args.real_slice)
+        cont = sd["cont"].astype(np.float32)
+        pdg = sd["pdg"].astype(np.int64)
+        p_eta = cont[:, 1].astype(np.float64)
+        p_phi = sd["p_phi"].astype(np.float64)
+        E_true = sd["E_true"].astype(np.float64)
+        eid_sh = sd["event_id"]
+        off = sd["offsets"]
+        pts, glob = sd["points_flat"], sd["glob"]
+        anc_sl = sd["anchor"]
+        # points are core-relative deltas from (particle + anchor); undo to absolute cell eta/phi
+        src = np.repeat(np.arange(len(off) - 1), np.diff(off))
+        ch = np.empty((len(pts), 5), np.float32)
+        ch[:, CH_ETA] = pts[:, 0] + glob[src, 2] + p_eta[src] + anc_sl[src, 0]
+        ch[:, CH_PHI] = pts[:, 1] + glob[src, 3] + p_phi[src] + anc_sl[src, 1]
+        ch[:, CH_LOGE] = pts[:, -1]
+        sel = np.arange(len(cont))
+        print(f"real reference: v2 slice {Path(args.real_slice).name} — {len(sel):,} showers, "
+              f"{len(pts):,} cells (reattributed={bool(sd['reattributed'])})")
+    else:
+        d = np.load(Path(args.preproc_dir) / f"shard_{args.shard:04d}_stage2.npz")
+        pf, aux, ch, off, eid_all = (d["particle_features"], d["particle_aux"], d["calo_hits_flat"],
+                                     d["calo_offsets"], d["event_ids"])
+        ncal = np.diff(off)
+        sel = np.where(np.isin(pf[:, PF_PDG], args.pdg_class) & (ncal >= 1))[0]
+        vr = np.hypot(aux[sel, AUX_VX], aux[sel, AUX_VY]); logE = np.log(np.clip(aux[sel, AUX_ENERGY], 1e-6, None))
+        cont = np.stack([pf[sel, PF_LOGPT], pf[sel, PF_ETA], logE, pf[sel, PF_CHARGE],
+                         pf[sel, PF_MASS], vr, aux[sel, AUX_VZ]], 1).astype(np.float32)
+        pdg = pf[sel, PF_PDG].astype(np.int64); p_eta, p_phi = pf[sel, PF_ETA], pf[sel, PF_PHI]
+        E_true = aux[sel, AUX_ENERGY].astype(np.float64)
+        eid_sh = eid_all[sel]
 
     contS = torch.as_tensor((cont - norm["cont_mean"]) / norm["cont_std"], device=dev)
     pdgT = torch.as_tensor(pdg, device=dev)
@@ -225,7 +256,7 @@ def main():
                          "respmax_real": round(float(resp_r[m].max()), 3), "respmax_gen": round(float(resp_g[m].max()), 3)})
 
     # (2) event gate
-    ev_of = eid[sel]; uev = np.unique(ev_of); Xr, Xg = [], []
+    ev_of = eid_sh; uev = np.unique(ev_of); Xr, Xg = [], []
     for ev in uev:
         pm = np.where(ev_of == ev)[0]; n_src = len(pm)
         re, rp, rE = [], [], []
