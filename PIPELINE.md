@@ -157,7 +157,11 @@ So any change to how particles are partitioned moves 9 of 10 features regardless
    "Continuous (x, y, z, E) output; separate deterministic projection onto cells". Neither exists.
    Consequence: the plan's own acceptance metrics — layer-wise energy fractions, shower depth
    profiles (line 356) — **have never been computable**, and every calo result is a 2D projection.
-2. **Cell-level metric.** Blocked on (1).
+2. **Cell-level metric.** Blocked on (1), and **exact cell identity is unreachable for barrel EM**:
+   `calo_hits` carries no layer id, and barrel `r` cannot recover the layer because staves tile a
+   cylinder so cells from different layers overlap in radius (max gap 0.985 mm over a 106 mm span).
+   Endcaps are exact — dets 9/11 have exactly 48 layers at 5.050 mm, dets 12/14 exactly 36 at
+   51.000 mm, 100% of cells on the grid, ~83% of deposited energy.
 3. **Tracker incidence** — the head exists (§5) but is not wired into any generation path.
 4. **Stage-1 / cascade generator.** Architecture settled (one recursive model on
    `[log_E, eta, vr, vz, pdg]`, ~3-4 batched levels) but not built.
