@@ -47,6 +47,17 @@ def main():
                          "head can only infer it implicitly through a shared trunk — five separate "
                          "changes that disturbed that route all degraded frac_near_floor. Distinct "
                          "from the ruled-out full-global conditioning, which failed on dim 0.")
+    ap.add_argument("--floor_n_buckets", type=int, default=0,
+                    help="route the energy head's at-floor Bernoulli through its own net, which also "
+                         "sees an EMBEDDING of the shower's cell count (n clamped to [1,N]); 0 = off. "
+                         "The Gaussian mixture is untouched. Targets the 2026-08-16 measurement of "
+                         "p(floor|n): the e± error is ENTIRELY at n=1 (real 0.011 vs generated 0.061, "
+                         "a 6x excess) and gone by n>=9, while the pion is missing a monotone SLOPE "
+                         "(real 0.018->0.032, generated flat). A single log_n scalar cannot express "
+                         "either — hence --energy_glob_idx 1 being worth only 0.618->0.574. Unlike "
+                         "`partition` (which forced the same n=1 fix at generation time and detonated "
+                         "the marginal) this changes only a discrete membership decision, never a "
+                         "cell's energy. 32 is a sensible N: exact for n=1..31, lumps the rest.")
     ap.add_argument("--anchor_cond", action="store_true",
                     help="condition the GlobalHead (only) on the anchor: [a_eta,a_phi,|a|] + a "
                          "branch one-hot. Fixes the measured branch blindness — the real residual "
@@ -59,10 +70,14 @@ def main():
                     help="dequantize the discrete count: log_n <- log(n + U(-0.5,0.5)) so the "
                          "continuous mixture can fit the n=1 atom (recovered by round at gen)")
     ap.add_argument("--no_wandb", action="store_true")
+    ap.add_argument("--seed", type=int, default=0,
+                    help="torch seed (init + batch sampling). Every logged run before 2026-08-16 used "
+                         "0, so keep it there for like-for-like comparisons; change it only to get a "
+                         "REPLICATE, which is what tells a real gate delta from seed noise.")
     args = ap.parse_args()
 
     dev = "cuda" if torch.cuda.is_available() else "cpu"
-    torch.manual_seed(0)
+    torch.manual_seed(args.seed)
     d = np.load(args.slice)
     norm = {k: d[k] for k in ["cont_mean", "cont_std", "glob_mean", "glob_std", "pts_mean", "pts_std"]}
     cont, pdg, glob, pts, off = d["cont"], d["pdg"], d["glob"], d["points_flat"], d["offsets"]
@@ -179,6 +194,7 @@ def main():
                      logE_max=logE_max, logE_max_pdg=logE_max_pdg, width_norm=width_norm,
                      separate_trunks=args.separate_trunks,
                      core_anchored=core_anchored != "none", energy_glob_idx=args.energy_glob_idx,
+                     floor_n_buckets=args.floor_n_buckets,
                      **anchor_kwargs, **qt_kwargs, **ctx_kwargs).to(dev)
     if core_anchored != "none":
         anc = d["anchor"]; amode = d["anchor_mode"]
@@ -206,6 +222,10 @@ def main():
     logE = torch.as_tensor(pts[:, 2], dtype=torch.float32, device=dev)
     psh = torch.as_tensor(point_shower, device=dev)
     pt_contS, pt_pdg, pt_globS = contS[psh], pdgT[psh], globS[psh]
+    # per-CELL cell count of the shower that cell belongs to, for the floor-vs-n head. Taken from the
+    # slice offsets (RAW count), not recovered from the standardised log_n, so training and the
+    # generation path (which passes the sampled `n[src]`) mean the same integer.
+    pt_nT = torch.as_tensor(npt.astype(np.int64)[point_shower], device=dev)
     with torch.no_grad():
         ancT = (model.anchor_feats(d["anchor"], d["anchor_mode"]).to(dev)
                 if model.anchor_cond else None)
@@ -235,7 +255,8 @@ def main():
             cfm = model.points.cfm_loss(posS[pi], model.cond_embed(pt_contS[pi], pt_pdg[pi], "points"),
                                         pt_globS[pi][:, :2]).item()
             eh = model.energy.loss(model.cond_embed(pt_contS[pi], pt_pdg[pi], "energy"),
-                                   logE[pi], model.log_floor, glob_std=pt_globS[pi]).item()
+                                   logE[pi], model.log_floor, glob_std=pt_globS[pi],
+                                   n_cells=pt_nT[pi]).item()
             si = va_sh_idx[torch.randint(len(va_sh_idx), (args.glob_batch,), device=dev)]
             g = model.glob.nll(model.cond_embed(contS[si], pdgT[si], "glob"), globS[si],
                                None if ancT is None else ancT[si]).item()
@@ -249,7 +270,7 @@ def main():
         cfm = model.points.cfm_loss(posS[pi], model.cond_embed(pt_contS[pi], pt_pdg[pi], "points"),
                                     pt_globS[pi][:, :2])
         ehl = model.energy.loss(model.cond_embed(pt_contS[pi], pt_pdg[pi], "energy"),
-                                logE[pi], model.log_floor, glob_std=pt_globS[pi])
+                                logE[pi], model.log_floor, glob_std=pt_globS[pi], n_cells=pt_nT[pi])
         gnll = model.glob.nll(model.cond_embed(contS[si], pdgT[si], "glob"), globS[si],
                               None if ancT is None else ancT[si])
         loss = cfm + ehl + args.glob_weight * gnll

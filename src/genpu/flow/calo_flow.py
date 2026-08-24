@@ -141,7 +141,7 @@ class EnergyHead(nn.Module):
     """
 
     def __init__(self, embed_dim=64, hidden=128, floor_eps=0.05, n_mix=3, glob_dim=0,
-                 glob_idx=None):
+                 glob_idx=None, n_buckets=0, n_emb_dim=8):
         super().__init__()
         self.n_mix = n_mix
         # WHICH globals the head sees. Historically a PREFIX (`glob_std[:, :glob_dim]`), i.e. either
@@ -161,22 +161,56 @@ class EnergyHead(nn.Module):
         # event-gate residual was logE_p90 / frac_near_floor).
         self.net = mlp([embed_dim + glob_dim, hidden, hidden, 1 + 3 * n_mix])
         self.floor_eps = floor_eps
+        # FLOOR-vs-MULTIPLICITY head (2026-08-16). `n_buckets > 0` routes the at-floor logit through
+        # its OWN small net that additionally sees an EMBEDDING of the shower's cell count, bucketed
+        # (n clamped to [1, n_buckets]); the Gaussian mixture keeps coming from `self.net` untouched.
+        #
+        # Why an embedding and not the `log_n` scalar (`--energy_glob_idx 1`): job 12470841 measured
+        # p(floor | n) per bin and the defect is NOT a smooth offset. For e± the entire error is at
+        # n = 1 -- real 0.011 (e-) / 0.009 (e+) vs a generated 0.061 / 0.062, a 6x excess -- and real
+        # and generated already agree to ~0.001 by n >= 9. A single scalar into an MLP dominated by
+        # large-n showers under-fits exactly that corner, which is why log_n was worth only
+        # 0.618 -> 0.574. The pion needs the complementary thing: a monotone SLOPE (real p climbs
+        # 0.018 -> 0.032 across n) that the model currently does not produce at all (flat ~0.018).
+        #
+        # Physically: a one-cell shower's single cell carries the ENTIRE shower energy, so it cannot
+        # be a faint fringe cell. Job 12471293 confirmed that reading by forcing it with `partition`
+        # (e- n=1 0.061 -> 0.011, exactly real) -- but partition rescales every cell's continuous
+        # energy and detonated the marginal (cell_logE 0.0153 -> 0.1194, gate8 0.746 -> 0.988).
+        #
+        # This route cannot repeat that: it changes only a DISCRETE membership decision, never a
+        # cell's energy, so it can neither blow up the cell-log-E marginal nor introduce the shared
+        # multiplicative scale that made the generated floor count over-dispersed (D 1.02 -> 2.09).
+        # Same distinction as the glob_idx note above: the ruled-out 2026-08-13 failure was dim 0,
+        # total_logE, making continuous energy a sharp function of a noisy SCALE; a count is a
+        # different quantity, and it is the floor Bernoulli that needs it.
+        self.n_buckets = int(n_buckets)
+        if self.n_buckets:
+            self.n_emb = nn.Embedding(self.n_buckets, n_emb_dim)
+            self.floor_net = mlp([embed_dim + glob_dim + n_emb_dim, hidden, 1])
 
-    def _out(self, cond_embed, glob_std=None):
+    def _out(self, cond_embed, glob_std=None, n_cells=None):
         if self.glob_dim:
             if glob_std is None:
                 raise ValueError("EnergyHead built with glob_dim>0 needs glob_std")
             cond_embed = torch.cat([cond_embed, glob_std[:, self.glob_idx]], dim=-1)
         o = self.net(cond_embed)
         m = o[:, 1:].view(-1, self.n_mix, 3)
-        return o[:, 0], m[..., 0], m[..., 1], m[..., 2].clamp(-4, 3)  # floor_logit, w_logit, mu, log_sigma
+        floor_logit = o[:, 0]
+        if self.n_buckets:
+            if n_cells is None:
+                raise ValueError("EnergyHead built with n_buckets>0 needs n_cells (per CELL: the "
+                                 "cell count of the shower that cell belongs to)")
+            b = n_cells.long().clamp(1, self.n_buckets) - 1
+            floor_logit = self.floor_net(torch.cat([cond_embed, self.n_emb(b)], dim=-1)).squeeze(-1)
+        return floor_logit, m[..., 0], m[..., 1], m[..., 2].clamp(-4, 3)
 
-    def loss(self, cond_embed, logE, log_floor, glob_std=None):
+    def loss(self, cond_embed, logE, log_floor, glob_std=None, n_cells=None):
         # at-floor = NARROW band around the exact zero-suppression pile (single-contributor
         # cells at 5e-5). Everything else — including the physical SUB-floor tail (shared-cell
         # contributions below 5e-5) — is modelled by the mixture, so we don't clamp it away.
         is_floor = (torch.abs(logE - log_floor) < self.floor_eps).float()
-        floor_logit, w_logit, mu, ls = self._out(cond_embed, glob_std)
+        floor_logit, w_logit, mu, ls = self._out(cond_embed, glob_std, n_cells)
         bce = F.binary_cross_entropy_with_logits(floor_logit, is_floor)
         logw = F.log_softmax(w_logit, dim=-1)                            # (N,K)
         comp = -0.5 * ((logE.unsqueeze(-1) - mu) / ls.exp()) ** 2 - ls    # (N,K), up to const
@@ -186,8 +220,8 @@ class EnergyHead(nn.Module):
         return bce + gnll
 
     @torch.no_grad()
-    def sample(self, cond_embed, log_floor, glob_std=None, logE_max=None):
-        floor_logit, w_logit, mu, ls = self._out(cond_embed, glob_std)
+    def sample(self, cond_embed, log_floor, glob_std=None, logE_max=None, n_cells=None):
+        floor_logit, w_logit, mu, ls = self._out(cond_embed, glob_std, n_cells)
         at_floor = torch.rand_like(floor_logit) < torch.sigmoid(floor_logit)
         k = torch.distributions.Categorical(logits=w_logit).sample()     # (N,)
         mu_k = mu.gather(1, k[:, None])[:, 0]; ls_k = ls.gather(1, k[:, None])[:, 0]
@@ -214,7 +248,7 @@ class CaloFlow(nn.Module):
                  energy_use_glob=True, logE_max=None, logE_max_pdg=None, width_norm=False,
                  ctx_pt_edges=None, ctx_loc=None, ctx_scale=None, ctx_mask=None,
                  separate_trunks=False, core_anchored=False, anchor_cond=False,
-                 anchor_mean=None, anchor_std=None, energy_glob_idx=None):
+                 anchor_mean=None, anchor_std=None, energy_glob_idx=None, floor_n_buckets=0):
         super().__init__()
         # CONDITIONING TRUNK(S). Shared (the original) means one ParticleConditioning MLP feeds all
         # three heads and the summed loss back-propagates every head's gradient into it — so changing
@@ -244,7 +278,7 @@ class CaloFlow(nn.Module):
         # energy_glob_idx overrides energy_use_glob: e.g. [1] = log_n only (multiplicity, no scale)
         self.energy = EnergyHead(embed_dim=embed_dim, n_mix=4,   # extra component for the sub-floor tail
                                  glob_dim=2 if energy_use_glob else 0,
-                                 glob_idx=energy_glob_idx)
+                                 glob_idx=energy_glob_idx, n_buckets=floor_n_buckets)
         for k, v in norm.items():
             self.register_buffer(k, torch.as_tensor(v, dtype=torch.float32))
         if log_floor is None:
@@ -337,7 +371,11 @@ class CaloFlow(nn.Module):
         opts.update(width_norm=bool(float(sd.get("width_norm", 0.0))) or len(norm["glob_mean"]) >= 5,
                     separate_trunks=any(k.startswith("cond_glob.") for k in sd),
                     core_anchored=bool(float(sd.get("core_anchored", 0.0))),
-                    anchor_cond=bool(float(sd.get("anchor_cond_on", 0.0))))
+                    anchor_cond=bool(float(sd.get("anchor_cond_on", 0.0))),
+                    # floor-vs-n head: its embedding table's size IS the bucket count; absent on
+                    # every pre-2026-08-16 checkpoint, which then rebuilds with it off
+                    floor_n_buckets=int(sd["energy.n_emb.weight"].shape[0])
+                    if "energy.n_emb.weight" in sd else 0)
         for key, arg in [("ctx_pt_edges", "ctx_pt_edges"), ("ctx_loc", "ctx_loc"),
                          ("ctx_scale", "ctx_scale"), ("ctx_mask", "ctx_mask")]:
             if key in sd:
@@ -501,7 +539,11 @@ class CaloFlow(nn.Module):
         # tightest available bound per cell: the shared scalar and the cell's own species max
         lmax = torch.minimum(self.logE_max.expand(src.shape[0]),
                              self.logE_max_pdg[pdg.long().clamp(0, self.logE_max_pdg.shape[0] - 1)][src])
-        logE = self.energy.sample(ce_e[src], self.log_floor, glob_std=g_std[src], logE_max=lmax)
+        # n[src] is the SAMPLED cell count of the shower this cell belongs to — the same count that
+        # decided how many cells to draw, so the floor head's conditioning is self-consistent by
+        # construction (no sampled-quantity mismatch of the kind that killed the 2x2 energy variants)
+        logE = self.energy.sample(ce_e[src], self.log_floor, glob_std=g_std[src], logE_max=lmax,
+                                  n_cells=n[src])
         core = g[:, 2:4] if g.shape[1] >= 4 else torch.zeros(S, 2, device=g.device)
         if core_anchor is not None:
             # the mixture predicted a small local residual; the physics prediction supplies the
