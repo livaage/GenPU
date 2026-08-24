@@ -86,6 +86,11 @@ surface-representation lever.
 
 ## Working conventions
 
+- **Read [PIPELINE.md](PIPELINE.md) first** — what the code actually does at each stage, what it
+  keeps and DROPS, what the models really output, and a "known gaps" list. It is separate from
+  `pileup_generator_plan.md` (intent) and `STATUS.md` (what we tried), and the gap between intent
+  and implementation is where this project's long-lived bugs have lived.
+
 - Research-memory workflow: **STATUS.md** (rolling) + **experiment-memory/** (append-only, one
   file per run). Read STATUS.md before proposing experiments; maintain via start-experiment /
   log-experiment skills. Regenerate diagnostic plots after any retrain.
