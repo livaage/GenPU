@@ -799,10 +799,15 @@ projection should do. **Read it as the projection EXPOSING a defect the continuo
 hid**: a cloud can put two points 0.1 mm apart and be scored as two cells where the detector reports
 one. 0.9357 was flattering.
 
-**The generator UNDER-merges**: co-occupancy 3.09% against the **7.2% within-shower sharing**
-(the merge is keyed on `src`, so 7.2% is the right reference, not the 3.5% cross-particle figure).
-Its points are too spread out to share a channel — plausibly the same defect as the missing two-point
-coherence, seen at cell scale. NOT verified.
+> **CORRECTED 2026-09-15 — the direction was BACKWARDS. The generator OVER-concentrates.**
+> 7.2% was the wrong reference: it counts raw CONTRIBUTIONS sharing a cell, which v2 re-attribution
+> already merges away, so the slice stores one row per DISTINCT cell and `log_n` targets distinct
+> cells. Measured on 200k real showers / 5.0M rows through the identical snap path: **real collision
+> 0.0003 vs generated 0.0361 — 120x.** The generator places 3.6% of its points close enough that the
+> detector reads one channel.
+> [correction](experiment-memory/2026-09-15-calo-generator-OVER-concentrates-corrects-under-merge.md)
+
+~~**The generator UNDER-merges**: co-occupancy 3.09% against the 7.2% within-shower sharing.~~
 
 > **METHOD WARNING — a PRE-EXISTING missing `wrap_pi` was corrupting every width/d_phi number.**
 > `calo_metrics.py` differenced `gen_phi - p_phi` unwrapped while the real side has always wrapped
@@ -826,8 +831,11 @@ coherence, seen at cell scale. NOT verified.
   [entry](experiment-memory/2026-09-15-calo-snap-to-cell-built-and-barrel-gap2-RETRACTED.md)
 - ~~Wire `snap_cells` in~~ **DONE** (`--snap_cells`, job 13929818). Remaining: a cell-level metric
   proper (occupancy, energy-per-cell against real cells).
-- **The generator under-merges** (3.09% vs 7.2% within-shower) — probe co-occupancy vs distance from
-  the shower core; if the core is too diffuse the deficit should concentrate there. Cheap, no retrain.
+- **The generator OVER-concentrates** (collision 0.0361 vs a real floor of 0.0003) — probe where the
+  collisions sit; the shower CORE is the candidate. Needs generated cells, so a GPU job. If it is the
+  core, `PointCFM` controls that directly and it is testable by resampling, no retrain.
+  Do NOT "fix" the merge: merging is the correct response to two deposits in one channel, the error
+  is upstream in placing them there.
 - **Boundary assignment** — the residual (HCAL endcap 2.5%, barrels 0.2-0.5%) is cells near a
   face/stave boundary assigned to the neighbour, not a lattice error (in-face residual is 1e-5 mm).
   Fix by testing both adjacent faces.
