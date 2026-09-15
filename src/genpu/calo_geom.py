@@ -30,9 +30,107 @@ def wrap_pi(d):
 
 
 def load_front_face(path: str | None = None):
-    """(barrel_r [mm], endcap_|z| [mm]) of the calo front face, from build_calo_geometry.py."""
+    """(barrel_r [mm], endcap_|z| [mm]) of the calo front face, from build_calo_geometry.py.
+
+    NOTE this is a SINGLE face for the whole calorimeter — det 10 for the barrel, det 9 for the
+    endcap, i.e. the ECAL. Depth measured from it runs continuously across the ECAL/HCAL boundary
+    and cannot say which side a cell is on; see `load_det_front_faces` and job 13033802.
+    """
     g = json.loads(Path(path or DEFAULT_GEOMETRY).read_text())["front_face"]
     return float(g["barrel_r"]), float(g["endcap_absz"])
+
+
+# ---------------------------------------------------------------- calorimeter sectioning
+# Measured 2026-08-27 (job 13033802, `scripts/calo_section_split.py`). The calorimeter is TWO
+# detectors and a cell's energy scale depends on which:
+#
+#   region        det    depth p1..p99 (mm)   <logE>   layer pitch   E frac
+#   barrel ECAL    10      -6 ..  228         -7.97     5.050 mm      0.161
+#   endcap ECAL   9,11     -10 ..  227        -8.07     5.050 mm      0.559
+#   barrel HCAL    13     388 .. 1446         -6.86    51.000 mm      0.008
+#   endcap HCAL  12,14    435 .. 2220         -6.89    51.000 mm      0.272
+#
+# Mean cell log-E STEPS by +1.12 (3.06x) across the physical gap, because an HCAL cell integrates
+# ~10x more material. That step is deterministic geometry the model should be GIVEN, not made to
+# infer — and it cannot infer it, because barrel and endcap overlap on the single-face depth axis
+# while transitioning at DIFFERENT depths (388 vs 435 mm).
+ECAL_DETS = (9, 10, 11)
+HCAL_DETS = (12, 13, 14)
+BARREL_DETS = (10, 13)
+N_CALO_REGIONS = 4
+
+
+def load_det_front_faces(path: str | None = None):
+    """{det: (is_barrel, face)} — face is r [mm] for barrel dets, |z| [mm] for endcap dets.
+
+    Same p5 convention as `front_face` (which is just det 10 / det 9 of this table), so
+    depth-within-section is directly comparable to the existing global depth for ECAL cells.
+    """
+    g = json.loads(Path(path or DEFAULT_GEOMETRY).read_text())["detectors"]
+    return {int(k): (bool(v["is_barrel"]),
+                     float(v["r_p5"] if v["is_barrel"] else v["absz_p5"]))
+            for k, v in g.items()}
+
+
+def load_region_boundaries(path: str | None = None):
+    """{is_barrel: (ecal_back, hcal_front, hcal_offset)} in GLOBAL-depth mm.
+
+    `ecal_back` is the ECAL's p95 extent, `hcal_front` the HCAL's front face, both expressed on the
+    single-front-face depth axis `points_flat[:, 2]` uses. `hcal_offset` = hcal_front - ecal_front is
+    exactly the constant that separates `depth` from `depth_local` for HCAL cells (verified on the
+    rebuilt slices: 389.396 mm barrel, 435.000 mm endcap, spread < 3e-4 mm).
+    """
+    g = json.loads(Path(path or DEFAULT_GEOMETRY).read_text())["detectors"]
+    out = {}
+    for is_barrel, ecal_d, hcal_d in ((True, 10, 13), (False, 9, 12)):
+        key = "r" if is_barrel else "absz"
+        ef = float(g[str(ecal_d)][f"{key}_p5"])
+        out[is_barrel] = (float(g[str(ecal_d)][f"{key}_p95"]) - ef,
+                          float(g[str(hcal_d)][f"{key}_p5"]) - ef,
+                          float(g[str(hcal_d)][f"{key}_p5"]) - ef)
+    return out
+
+
+# Per-CELL barrel cut for the generation path, fitted on `multispecies_v2_h5` (41.65M cells,
+# 2026-08-27). Sits BELOW the geometric eta_transition (1.666) because cells spread around the
+# shower core, so the effective boundary for a CELL is lower than for the incident particle.
+#   |eta| < 1.60  ->  barrel accuracy 0.9951, REGION accuracy 0.9951, depth_local RMS err 1.2 mm
+# SECTION (ECAL vs HCAL) accuracy is 1.00000 at EVERY threshold tried, because both midpoints fall
+# inside the physical gap where no real cell exists -- so the 3x sampling step, the thing this
+# conditioning exists to convey, is assigned exactly regardless of the barrel guess.
+ETA_BARREL_CUT = 1.60
+
+
+def depth_to_region_local(depth, is_barrel, path: str | None = None):
+    """GENERATION-side inverse of the slice's section fields: (region token, depth_local).
+
+    The model samples a continuous GLOBAL depth and no detector id, but region and depth-within-
+    section are a DETERMINISTIC function of that depth plus barrel-vs-endcap -- which generation
+    already has, as the anchor branch. So no new sampled quantity is needed and the generated frame
+    matches the training frame by construction, the same reason the anchor itself lives here.
+
+    Cells landing in the PHYSICAL GAP between the sections (barrel 183..389 mm, endcap 207..435 mm)
+    are assigned by midpoint. Real cells cannot be there; generated ones can, because the point flow
+    is continuous and knows nothing about the gap.
+    """
+    depth = np.asarray(depth, np.float64)
+    is_barrel = np.asarray(is_barrel, bool)
+    B = load_region_boundaries(path)
+    mid = np.where(is_barrel, 0.5 * (B[True][0] + B[True][1]), 0.5 * (B[False][0] + B[False][1]))
+    off = np.where(is_barrel, B[True][2], B[False][2])
+    is_hcal = depth >= mid
+    region = (2 * is_hcal + ~is_barrel).astype(np.int8)
+    return region, (depth - np.where(is_hcal, off, 0.0)).astype(np.float32)
+
+
+def det_region(det):
+    """4-way region token: 0 barrel-ECAL, 1 endcap-ECAL, 2 barrel-HCAL, 3 endcap-HCAL.
+
+    This is the token the energy head needs: it carries BOTH the sampling section (which sets the
+    3x cell-energy step) and barrel-vs-endcap (which sets where along depth that step happens).
+    """
+    det = np.asarray(det, np.int64)
+    return (2 * np.isin(det, HCAL_DETS) + ~np.isin(det, BARREL_DETS)).astype(np.int8)
 
 
 def xyz_to_eta_phi(x, y, z):
