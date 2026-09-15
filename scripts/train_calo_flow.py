@@ -30,6 +30,15 @@ def main():
     ap.add_argument("--no_energy_glob", action="store_true",
                     help="pre-audit behaviour: condition the energy head on particle features only "
                          "(measured R^2 0.05 on the per-shower energy scale vs 0.85 with the global)")
+    ap.add_argument("--no_floor_atom", action="store_true",
+                    help="drop the at-floor Bernoulli point mass and train the energy mixture on "
+                         "ALL cells. Measured 2026-09-07 on 13,054,567 held-out e± cells: ZERO sit "
+                         "at log(5e-5), 0.387%% sit below it, and the threshold is a x19 DENSITY "
+                         "STEP -- so the atom is a point mass on a value the data never takes, and "
+                         "the mixture beside it is trained with a hole the atom fills back in. "
+                         "Open risk: a Gaussian mixture cannot represent a discontinuity and may "
+                         "smear the step; if it does, the fix is to TRUNCATE the mixture at the "
+                         "threshold, not to restore the atom.")
     ap.add_argument("--separate_trunks", action="store_true",
                     help="give each head its own ParticleConditioning MLP. With the shared trunk, "
                          "changing one head's task moves what the others see (measured twice); this "
@@ -58,6 +67,15 @@ def main():
                          "`partition` (which forced the same n=1 fix at generation time and detonated "
                          "the marginal) this changes only a discrete membership decision, never a "
                          "cell's energy. 32 is a sensible N: exact for n=1..31, lumps the rest.")
+    ap.add_argument("--energy_pos", action="store_true",
+                    help="condition the ENERGY head on each cell's own position: standardised "
+                         "depth-within-section + transverse radius in units of the shower width, "
+                         "plus the 4-way ECAL/HCAL x barrel/endcap region token. Until now every "
+                         "input to that head was a per-SHOWER quantity, so cell energy was "
+                         "independent of cell position by construction; measured within-shower "
+                         "rho(logE, depth) real vs generated is p +0.52/0.000, pi +0.20/0.000, "
+                         "gamma -0.11/0.000 (jobs 13032162, 13033802). Needs a v2 slice carrying "
+                         "point_depth_local / point_region.")
     ap.add_argument("--anchor_cond", action="store_true",
                     help="condition the GlobalHead (only) on the anchor: [a_eta,a_phi,|a|] + a "
                          "branch one-hot. Fixes the measured branch blindness — the real residual "
@@ -178,10 +196,42 @@ def main():
           f"{'  (v2: includes longitudinal depth)' if pos_dim == 3 else ''}")
     logE_max = float(pts[:, -1].max())
     from genpu.preprocessing import N_PDG_CLASSES
+    from genpu.flow.calo_flow import POS_FEAT_NAMES
+    from genpu.calo_geom import N_CALO_REGIONS
     pt_pdg_np = np.repeat(pdg.astype(np.int64), npt)
     logE_max_pdg = np.full(N_PDG_CLASSES, np.inf, np.float32)
     for c in np.unique(pt_pdg_np):
         logE_max_pdg[int(c)] = pts[pt_pdg_np == c, -1].max()   # LAST column = energy; index 2 is DEPTH under v2
+    # PER-SPECIES CELL-COUNT BOUND, same contract as logE_max_pdg: the largest shower this class
+    # actually produced. `sample_showers` used a bare max_cells=128 literal until 2026-09-14, which
+    # on this slice truncates 2.10% of showers / 6.87% of all cells, almost all hadronic
+    # (pbar 25.3% of showers, mu± 0.00%) -- so one shared bound is as wrong here as it was there.
+    _pdg_sh = pdg.astype(np.int64)
+    n_max_pdg = np.full(N_PDG_CLASSES, np.inf, np.float32)
+    for c in np.unique(_pdg_sh):
+        n_max_pdg[int(c)] = float(npt[_pdg_sh == c].max())
+    print("  per-class n_max: " + ", ".join(
+        f"{int(c)}:{n_max_pdg[int(c)]:.0f}" for c in np.unique(_pdg_sh)))
+    # PER-CELL POSITION FEATURES (2026-08-27). Read from the slice's section fields, never
+    # recomputed here -- `build_calo_slice_v2` is the one implementation, the same rule that keeps
+    # the anchor from drifting between training and generation.
+    pos_feat_np = region_np = None
+    if args.energy_pos:
+        need = {"point_depth_local", "point_region"}
+        if not need <= set(d.files):
+            raise SystemExit(f"--energy_pos needs {sorted(need)} in the slice; rebuild with "
+                             f"build_calo_slice_v2.py (2026-08-27 or later)")
+        dloc = d["point_depth_local"].astype(np.float32)[:pts.shape[0]]
+        region_np = d["point_region"].astype(np.int64)[:pts.shape[0]]
+        _w = np.sqrt(np.maximum(
+            np.bincount(point_shower, weights=(pts[:, 0] ** 2 + pts[:, 1] ** 2), minlength=S) / npt, 1e-12))
+        r_over_w = (np.hypot(pts[:, 0], pts[:, 1]) / np.maximum(_w[point_shower], 1e-6)).astype(np.float32)
+        pos_feat_np = np.stack([dloc, r_over_w], 1)
+        # standardise on the TRAIN split only, so the val split cannot leak into the norm
+        _m = pos_feat_np[tr_pt].mean(0); _s = pos_feat_np[tr_pt].std(0) + 1e-6
+        print(f"--energy_pos ON: features {POS_FEAT_NAMES} mean {_m.round(3).tolist()} "
+              f"std {_s.round(3).tolist()}; region mix "
+              f"{ {int(k): round(float(v)/len(region_np), 4) for k, v in zip(*np.unique(region_np, return_counts=True))} }")
     width_norm = bool(int(d["width_normalized"])) if "width_normalized" in d else False
     # Phase 1: the slice decides the core frame; the model just records it so the generation path
     # knows it must be handed the anchor.
@@ -196,10 +246,16 @@ def main():
         a3 = np.concatenate([anc_np, np.hypot(anc_np[:, 0], anc_np[:, 1])[:, None]], 1)
         anchor_kwargs = dict(anchor_cond=True, anchor_mean=a3.mean(0), anchor_std=a3.std(0) + 1e-6)
     model = CaloFlow(norm, log_floor=log_floor, energy_use_glob=not args.no_energy_glob,
-                     logE_max=logE_max, logE_max_pdg=logE_max_pdg, width_norm=width_norm,
+                     logE_max=logE_max, logE_max_pdg=logE_max_pdg, n_max_pdg=n_max_pdg,
+                     width_norm=width_norm,
                      separate_trunks=args.separate_trunks,
                      core_anchored=core_anchored != "none", energy_glob_idx=args.energy_glob_idx,
                      floor_n_buckets=args.floor_n_buckets, pos_dim=pos_dim,
+                     floor_atom=not args.no_floor_atom,
+                     energy_pos_dim=(pos_feat_np.shape[1] if pos_feat_np is not None else 0),
+                     energy_n_regions=(N_CALO_REGIONS if region_np is not None else 0),
+                     pos_feat_mean=(_m if pos_feat_np is not None else None),
+                     pos_feat_std=(_s if pos_feat_np is not None else None),
                      **anchor_kwargs, **qt_kwargs, **ctx_kwargs).to(dev)
     if core_anchored != "none":
         anc = d["anchor"]; amode = d["anchor_mode"]
@@ -231,6 +287,10 @@ def main():
     # slice offsets (RAW count), not recovered from the standardised log_n, so training and the
     # generation path (which passes the sampled `n[src]`) mean the same integer.
     pt_nT = torch.as_tensor(npt.astype(np.int64)[point_shower], device=dev)
+    pos_featT = (torch.as_tensor((pos_feat_np - _m) / _s, dtype=torch.float32, device=dev)
+                 if pos_feat_np is not None else None)
+    regionT = (torch.as_tensor(region_np, dtype=torch.long, device=dev)
+               if region_np is not None else None)
     with torch.no_grad():
         ancT = (model.anchor_feats(d["anchor"], d["anchor_mode"]).to(dev)
                 if model.anchor_cond else None)
@@ -261,7 +321,9 @@ def main():
                                         pt_globS[pi][:, :2]).item()
             eh = model.energy.loss(model.cond_embed(pt_contS[pi], pt_pdg[pi], "energy"),
                                    logE[pi], model.log_floor, glob_std=pt_globS[pi],
-                                   n_cells=pt_nT[pi]).item()
+                                   n_cells=pt_nT[pi],
+                                   pos_feat=None if pos_featT is None else pos_featT[pi],
+                                   region=None if regionT is None else regionT[pi]).item()
             si = va_sh_idx[torch.randint(len(va_sh_idx), (args.glob_batch,), device=dev)]
             g = model.glob.nll(model.cond_embed(contS[si], pdgT[si], "glob"), globS[si],
                                None if ancT is None else ancT[si]).item()
@@ -275,7 +337,9 @@ def main():
         cfm = model.points.cfm_loss(posS[pi], model.cond_embed(pt_contS[pi], pt_pdg[pi], "points"),
                                     pt_globS[pi][:, :2])
         ehl = model.energy.loss(model.cond_embed(pt_contS[pi], pt_pdg[pi], "energy"),
-                                logE[pi], model.log_floor, glob_std=pt_globS[pi], n_cells=pt_nT[pi])
+                                logE[pi], model.log_floor, glob_std=pt_globS[pi], n_cells=pt_nT[pi],
+                                pos_feat=None if pos_featT is None else pos_featT[pi],
+                                region=None if regionT is None else regionT[pi])
         gnll = model.glob.nll(model.cond_embed(contS[si], pdgT[si], "glob"), globS[si],
                               None if ancT is None else ancT[si])
         loss = cfm + ehl + args.glob_weight * gnll

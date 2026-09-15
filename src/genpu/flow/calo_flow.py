@@ -119,6 +119,17 @@ class PointCFM(nn.Module):
         return x
 
 
+# Order of the per-cell position features. Fixed HERE so the trainer and the sampler cannot
+# disagree about which column is which -- the same failure class as the "energy is the last point
+# column" bug that bounded the energy head with a depth in millimetres.
+POS_FEAT_NAMES = ("depth_local", "r_over_width")
+
+
+def build_pos_feat(depth_local, r_over_width, mean, std):
+    """(P,2) standardised per-cell position features, in POS_FEAT_NAMES order."""
+    return (torch.stack([depth_local, r_over_width], dim=-1) - mean) / std
+
+
 class EnergyHead(nn.Module):
     """Per-cell log-E: at-floor Bernoulli + Gaussian MIXTURE above the floor.
 
@@ -138,12 +149,53 @@ class EnergyHead(nn.Module):
     sets the total exactly, and the head only has to model the SHAPE of the split.
 
     log-E is PHYSICAL; floor = zero-suppression threshold.
+
+    !!! THE "PILE" THIS HEAD MODELS DOES NOT EXIST (measured 2026-08-27, job 13032162) !!!
+    Raw `calo_hits.total_energy`: min>0 = 5.0001e-05 GeV, frac below 5e-5 = 0.00000, 1,493,002
+    distinct values in 1,528,778 cells. The 50 keV cutoff is real and applies to the CELL TOTAL,
+    but it is a hard TRUNCATION, not an atom -- zero suppression discards sub-threshold cells, it
+    does not stack them on the threshold. **Zero** cells sit at log(5e-5) in either a v1 or a v2
+    slice; per-shower ATTRIBUTED energy is a share of the cell total, so shared cells fall BELOW it
+    (sub-floor tail 1.06% v1 / 0.39% v2), and what the slice shows at the threshold is a ~17x
+    DENSITY STEP -- the truncation edge of the unshared population.
+
+    `sample` therefore places ~0.56% of its cells at exactly `log_floor`, a value the data never
+    contains (gen head-band 0.0056 vs real 0.0030 on e±). And the metric and the mechanism measure
+    different populations: the gate's `frac_near_floor` band (`logE < LF+0.5`) holds 3.79% of e±
+    cells while the band trained here (`|logE-LF| < floor_eps`) holds 0.30%, so 92% of what the
+    gate scores is drawn by the MIXTURE, not by this logit -- and `n_buckets` below routes ONLY the
+    logit. That is the likeliest reason ten experiments since 2026-08-13 could not move the feature.
+
+    INDICATED REDESIGN (not yet built): drop the point mass for a mixture TRUNCATED at log(5e-5),
+    and re-purpose the Bernoulli to the physically real binary -- is this cell's attributed share
+    sub-threshold. Note `partition` in `sample_showers` rescales non-floor cells by `s_rest` AFTER
+    the draw, which would smear a truncated edge to `log_floor + log(s_rest)` per shower; the fix
+    is to emit energies as FRACTIONS on the simplex so the sum is exact by construction and no
+    post-hoc rescale exists. See PIPELINE.md and the 2026-08-27 experiment-memory entries.
     """
 
     def __init__(self, embed_dim=64, hidden=128, floor_eps=0.05, n_mix=3, glob_dim=0,
-                 glob_idx=None, n_buckets=0, n_emb_dim=8):
+                 glob_idx=None, n_buckets=0, n_emb_dim=8,
+                 pos_dim=0, n_regions=0, region_emb_dim=8, floor_atom=True):
         super().__init__()
         self.n_mix = n_mix
+        # FLOOR ATOM OFF (2026-09-07). Measured on 13,054,567 held-out e± cells: **zero** sit at
+        # log(5e-5) (exact, `|logE-LF| < 1e-6` -> 0.000000), 0.387% sit BELOW it, and the threshold
+        # is a **x19 density step** (bin below 4,336 cells -> bin above 82,294). So the Bernoulli is
+        # a point mass on a value the data never takes, and the mixture beside it is trained with a
+        # hole cut out that the Bernoulli then fills back in -- circular, which is why ten
+        # experiments since 2026-08-13 could not move `frac_near_floor`.
+        #
+        # With `floor_atom=False`: no Bernoulli, no BCE term, and the mixture is trained on ALL
+        # cells (no `cont` mask) and sampled with no point-mass override. The head's OUTPUT WIDTH
+        # IS UNCHANGED (`1 + 3*n_mix`) so every existing checkpoint still loads and the A/B is
+        # architecture-matched; the floor logit is simply unused.
+        #
+        # KNOWN OPEN RISK, stated before the run: a sum of Gaussians cannot represent a
+        # discontinuity, so it may smear the x19 step and put too many cells below the threshold
+        # (real: 0.387%). If it does, the fix is to TRUNCATE the mixture at log(5e-5) -- a change
+        # to the likelihood's normalisation, not another branch. Measure before assuming.
+        self.floor_atom = bool(floor_atom)
         # WHICH globals the head sees. Historically a PREFIX (`glob_std[:, :glob_dim]`), i.e. either
         # nothing or [total_logE, log_n] together. `glob_idx` selects an explicit list instead, so
         # the head can be given the COUNT without the energy scale — the 2026-08-14 diagnosis:
@@ -156,10 +208,33 @@ class EnergyHead(nn.Module):
         self.glob_idx = list(glob_idx) if glob_idx is not None else list(range(glob_dim))
         glob_dim = len(self.glob_idx)
         self.glob_dim = glob_dim
+        # PER-CELL POSITION (2026-08-27). Until now every input to this head was a PER-SHOWER
+        # quantity gathered by `[src]`, so the two cells of a shower received a bit-identical input
+        # vector and cell energy was independent of cell position BY CONSTRUCTION. Measured
+        # within-shower rho(logE, depth), real vs generated: p +0.519 / 0.000, mu± +0.38 / 0.000,
+        # pi± +0.20 / 0.000, gamma -0.110 / 0.000 (jobs 13032162, 13033802). The head could not
+        # learn any of it, at any capacity, because the information was absent from its input.
+        #
+        # `pos_feat` is continuous per-cell geometry (depth-within-section, transverse radius);
+        # `region` is the 4-way ECAL/HCAL x barrel/endcap token. The region matters on its own: mean
+        # cell log-E STEPS by +1.12 (3.06x) across the ECAL/HCAL boundary because an HCAL cell
+        # integrates ~10x more material, and that step is deterministic geometry the head should be
+        # GIVEN rather than made to infer -- which it cannot, since the single-front-face `depth`
+        # axis has barrel and endcap overlapping while transitioning at different depths.
+        #
+        # Signs FLIP by species (gamma -0.11 vs p +0.52) and cancel when pooled (-0.04), so this
+        # must interact with PDG. It does: `cond_embed` already carries the class and the MLP mixes
+        # them, which is why the position input goes in here rather than into a separate branch.
+        self.pos_dim = int(pos_dim)
+        self.n_regions = int(n_regions)
+        self.region_emb_dim = int(region_emb_dim) if self.n_regions else 0
+        if self.n_regions:
+            self.region_emb = nn.Embedding(self.n_regions, self.region_emb_dim)
+        in_dim = embed_dim + glob_dim + self.pos_dim + self.region_emb_dim
         # floor_logit + n_mix*(weight_logit, mu, log_sigma): a K-Gaussian MIXTURE over
         # above-floor log-E captures the skewed tail a single Gaussian misses (the
         # event-gate residual was logE_p90 / frac_near_floor).
-        self.net = mlp([embed_dim + glob_dim, hidden, hidden, 1 + 3 * n_mix])
+        self.net = mlp([in_dim, hidden, hidden, 1 + 3 * n_mix])
         self.floor_eps = floor_eps
         # FLOOR-vs-MULTIPLICITY head (2026-08-16). `n_buckets > 0` routes the at-floor logit through
         # its OWN small net that additionally sees an EMBEDDING of the shower's cell count, bucketed
@@ -187,13 +262,24 @@ class EnergyHead(nn.Module):
         self.n_buckets = int(n_buckets)
         if self.n_buckets:
             self.n_emb = nn.Embedding(self.n_buckets, n_emb_dim)
-            self.floor_net = mlp([embed_dim + glob_dim + n_emb_dim, hidden, 1])
+            self.floor_net = mlp([in_dim + n_emb_dim, hidden, 1])
 
-    def _out(self, cond_embed, glob_std=None, n_cells=None):
+    def _out(self, cond_embed, glob_std=None, n_cells=None, pos_feat=None, region=None):
         if self.glob_dim:
             if glob_std is None:
                 raise ValueError("EnergyHead built with glob_dim>0 needs glob_std")
             cond_embed = torch.cat([cond_embed, glob_std[:, self.glob_idx]], dim=-1)
+        if self.pos_dim:
+            if pos_feat is None:
+                raise ValueError("EnergyHead built with pos_dim>0 needs pos_feat (PER CELL)")
+            if pos_feat.shape[-1] != self.pos_dim:
+                raise ValueError(f"pos_feat has {pos_feat.shape[-1]} features, expected {self.pos_dim}")
+            cond_embed = torch.cat([cond_embed, pos_feat], dim=-1)
+        if self.n_regions:
+            if region is None:
+                raise ValueError("EnergyHead built with n_regions>0 needs region (PER CELL)")
+            cond_embed = torch.cat(
+                [cond_embed, self.region_emb(region.long().clamp(0, self.n_regions - 1))], dim=-1)
         o = self.net(cond_embed)
         m = o[:, 1:].view(-1, self.n_mix, 3)
         floor_logit = o[:, 0]
@@ -205,28 +291,36 @@ class EnergyHead(nn.Module):
             floor_logit = self.floor_net(torch.cat([cond_embed, self.n_emb(b)], dim=-1)).squeeze(-1)
         return floor_logit, m[..., 0], m[..., 1], m[..., 2].clamp(-4, 3)
 
-    def loss(self, cond_embed, logE, log_floor, glob_std=None, n_cells=None):
-        # at-floor = NARROW band around the exact zero-suppression pile (single-contributor
-        # cells at 5e-5). Everything else — including the physical SUB-floor tail (shared-cell
-        # contributions below 5e-5) — is modelled by the mixture, so we don't clamp it away.
-        is_floor = (torch.abs(logE - log_floor) < self.floor_eps).float()
-        floor_logit, w_logit, mu, ls = self._out(cond_embed, glob_std, n_cells)
-        bce = F.binary_cross_entropy_with_logits(floor_logit, is_floor)
+    def loss(self, cond_embed, logE, log_floor, glob_std=None, n_cells=None,
+             pos_feat=None, region=None):
+        # at-floor = NARROW band around log(5e-5). NOTE the docstring: there is no PILE there --
+        # the threshold is a truncation edge, not an atom, so this Bernoulli is fitting the density
+        # of a narrow slice of continuum (0.30% of e± cells) rather than a discrete population.
+        # Everything else — including the physical SUB-floor tail (shared-cell contributions below
+        # 5e-5, 0.39% of v2 cells) — is modelled by the mixture, so we don't clamp it away.
+        floor_logit, w_logit, mu, ls = self._out(cond_embed, glob_std, n_cells, pos_feat, region)
         logw = F.log_softmax(w_logit, dim=-1)                            # (N,K)
         comp = -0.5 * ((logE.unsqueeze(-1) - mu) / ls.exp()) ** 2 - ls    # (N,K), up to const
         logp = torch.logsumexp(logw + comp, dim=-1)                       # (N,)
+        if not self.floor_atom:
+            # no atom: ONE density over every cell, nothing masked out, no Bernoulli.
+            return -logp.mean()
+        is_floor = (torch.abs(logE - log_floor) < self.floor_eps).float()
+        bce = F.binary_cross_entropy_with_logits(floor_logit, is_floor)
         cont = 1.0 - is_floor                                            # continuum (above AND below pile)
         gnll = (-logp * cont).sum() / cont.sum().clamp(min=1.0)
         return bce + gnll
 
     @torch.no_grad()
-    def sample(self, cond_embed, log_floor, glob_std=None, logE_max=None, n_cells=None):
-        floor_logit, w_logit, mu, ls = self._out(cond_embed, glob_std, n_cells)
-        at_floor = torch.rand_like(floor_logit) < torch.sigmoid(floor_logit)
+    def sample(self, cond_embed, log_floor, glob_std=None, logE_max=None, n_cells=None,
+               pos_feat=None, region=None):
+        floor_logit, w_logit, mu, ls = self._out(cond_embed, glob_std, n_cells, pos_feat, region)
         k = torch.distributions.Categorical(logits=w_logit).sample()     # (N,)
         mu_k = mu.gather(1, k[:, None])[:, 0]; ls_k = ls.gather(1, k[:, None])[:, 0]
         logE = mu_k + torch.randn_like(mu_k) * ls_k.exp()
-        logE = torch.where(at_floor, torch.full_like(logE, log_floor), logE)
+        if self.floor_atom:
+            at_floor = torch.rand_like(floor_logit) < torch.sigmoid(floor_logit)
+            logE = torch.where(at_floor, torch.full_like(logE, log_floor), logE)
         # BOUND THE TAIL. A mixture Gaussian is unbounded above, so a rare draw lands cells far
         # past anything physical (measured: pion gen max log-E +0.28 vs real -1.76, i.e. a 1.3 GeV
         # cell where the hardest real cell is 0.17 GeV). 167 such cells in 4.7M were enough to put
@@ -248,7 +342,9 @@ class CaloFlow(nn.Module):
                  energy_use_glob=True, logE_max=None, logE_max_pdg=None, width_norm=False,
                  ctx_pt_edges=None, ctx_loc=None, ctx_scale=None, ctx_mask=None,
                  separate_trunks=False, core_anchored=False, anchor_cond=False,
-                 anchor_mean=None, anchor_std=None, energy_glob_idx=None, floor_n_buckets=0):
+                 anchor_mean=None, anchor_std=None, energy_glob_idx=None, floor_n_buckets=0,
+                 energy_pos_dim=0, energy_n_regions=0, pos_feat_mean=None, pos_feat_std=None,
+                 floor_atom=True, n_max_pdg=None):
         super().__init__()
         # CONDITIONING TRUNK(S). Shared (the original) means one ParticleConditioning MLP feeds all
         # three heads and the summed loss back-propagates every head's gradient into it — so changing
@@ -282,7 +378,21 @@ class CaloFlow(nn.Module):
         # energy_glob_idx overrides energy_use_glob: e.g. [1] = log_n only (multiplicity, no scale)
         self.energy = EnergyHead(embed_dim=embed_dim, n_mix=4,   # extra component for the sub-floor tail
                                  glob_dim=2 if energy_use_glob else 0,
-                                 glob_idx=energy_glob_idx, n_buckets=floor_n_buckets)
+                                 glob_idx=energy_glob_idx, n_buckets=floor_n_buckets,
+                                 pos_dim=int(energy_pos_dim), n_regions=int(energy_n_regions),
+                                 floor_atom=floor_atom)
+        if floor_n_buckets and not floor_atom:
+            # `floor_n_buckets` routes the at-floor LOGIT through a cell-count embedding; with no
+            # atom there is no logit to route. Contradictory, and silently a no-op -- refuse.
+            raise ValueError("floor_n_buckets > 0 is meaningless with floor_atom=False")
+        # standardisation for the per-cell position features, stored so generation cannot drift
+        # from training (same reason every other norm lives on the module). Order is fixed by
+        # `POS_FEAT_NAMES`; identity by default so a 0-dim head is unaffected.
+        _pfd = max(int(energy_pos_dim), 1)
+        self.register_buffer("pos_feat_mean", torch.zeros(_pfd) if pos_feat_mean is None
+                             else torch.as_tensor(pos_feat_mean, dtype=torch.float32))
+        self.register_buffer("pos_feat_std", torch.ones(_pfd) if pos_feat_std is None
+                             else torch.as_tensor(pos_feat_std, dtype=torch.float32))
         for k, v in norm.items():
             self.register_buffer(k, torch.as_tensor(v, dtype=torch.float32))
         if log_floor is None:
@@ -297,6 +407,19 @@ class CaloFlow(nn.Module):
         self.register_buffer("logE_max_pdg", torch.full((N_PDG_CLASSES,), float("inf"))
                              if logE_max_pdg is None else
                              torch.as_tensor(logE_max_pdg, dtype=torch.float32))
+        # PER-SPECIES CELL-COUNT BOUND. `sample_showers` clamps the sampled cell count, and until
+        # 2026-09-14 that clamp was a bare `max_cells=128` literal -- a number no measurement ever
+        # justified. Measured on `multispecies_v2_h5` (1.68M showers): 128 truncates 2.10% of
+        # showers carrying 17.7% of cells, destroying 6.87% of ALL cells, and it lands almost
+        # entirely on hadrons (pbar 25.3% of showers / 21.3% of cells; mu±, pi0 exactly 0.00%).
+        # Because `partition=True` renormalises to the SAMPLED total, truncation does not drop that
+        # energy -- it packs it into the survivors, inflating every per-cell energy feature.
+        # Same contract as `logE_max_pdg` above: the largest shower seen in training, per class,
+        # so generation cannot exceed what the detector produced. inf on every earlier checkpoint,
+        # which then falls back to the `max_cells` argument exactly as before.
+        self.register_buffer("n_max_pdg", torch.full((N_PDG_CLASSES,), float("inf"))
+                             if n_max_pdg is None else
+                             torch.as_tensor(n_max_pdg, dtype=torch.float32))
         # points were stored in units of each shower's own RMS width, with log_width as glob dim 4;
         # generation must scale the sampled cloud back up by the sampled width.
         self.register_buffer("width_norm", torch.tensor(1.0 if width_norm else 0.0))
@@ -308,6 +431,7 @@ class CaloFlow(nn.Module):
         # produce plausible-looking marginals.
         self.register_buffer("core_anchored", torch.tensor(1.0 if core_anchored else 0.0))
         self.register_buffer("anchor_cond_on", torch.tensor(1.0 if anchor_cond else 0.0))
+        self.register_buffer("floor_atom_on", torch.tensor(1.0 if floor_atom else 0.0))
         # which globals the energy head sees, so from_checkpoint can rebuild the exact shape
         self.register_buffer("energy_glob_idx",
                              torch.tensor(self.energy.glob_idx, dtype=torch.long))
@@ -383,10 +507,27 @@ class CaloFlow(nn.Module):
                     separate_trunks=any(k.startswith("cond_glob.") for k in sd),
                     core_anchored=bool(float(sd.get("core_anchored", 0.0))),
                     anchor_cond=bool(float(sd.get("anchor_cond_on", 0.0))),
+                    # the floor ATOM. Absent on every pre-2026-09-07 checkpoint, which must rebuild
+                    # with it ON -- default 1.0, unlike every other flag here, because off is the
+                    # new behaviour and defaulting to it would silently change old checkpoints.
+                    floor_atom=bool(float(sd.get("floor_atom_on", 1.0))),
                     # floor-vs-n head: its embedding table's size IS the bucket count; absent on
                     # every pre-2026-08-16 checkpoint, which then rebuilds with it off
                     floor_n_buckets=int(sd["energy.n_emb.weight"].shape[0])
-                    if "energy.n_emb.weight" in sd else 0)
+                    if "energy.n_emb.weight" in sd else 0,
+                    # per-cell position conditioning (2026-08-27). The region embedding table's
+                    # size IS the region count; pos_dim is whatever width of the energy net's first
+                    # layer is left once the embedding, the globals and the region embedding are
+                    # accounted for. Both absent on every earlier checkpoint, which rebuilds with
+                    # the head position-blind exactly as before.
+                    energy_n_regions=int(sd["energy.region_emb.weight"].shape[0])
+                    if "energy.region_emb.weight" in sd else 0)
+        _emb = 64
+        _gd = (len(opts["energy_glob_idx"]) if opts.get("energy_glob_idx") is not None
+               else (2 if opts.get("energy_use_glob") else 0))
+        _rd = (int(sd["energy.region_emb.weight"].shape[1])
+               if "energy.region_emb.weight" in sd else 0)
+        opts["energy_pos_dim"] = max(int(sd["energy.net.0.weight"].shape[1]) - _emb - _gd - _rd, 0)
         for key, arg in [("ctx_pt_edges", "ctx_pt_edges"), ("ctx_loc", "ctx_loc"),
                          ("ctx_scale", "ctx_scale"), ("ctx_mask", "ctx_mask")]:
             if key in sd:
@@ -494,6 +635,7 @@ class CaloFlow(nn.Module):
 
         Returns a dict of numpy-friendly tensors:
           n     (S,)   int64  cells per shower          src   (P,)  int64  shower index per cell
+          n_trunc int          showers whose sampled cell count hit the cap (see `max_cells`)
           core  (S,2)         shower core (d_eta,d_phi) offset from the particle direction
           pos   (P,2)         cell offset from the core (add core + particle eta/phi for global)
           logE  (P,)          cell log-E [GeV]          total (S,)  sampled shower total E [GeV]
@@ -529,7 +671,18 @@ class CaloFlow(nn.Module):
         ctx = self.context_of(cont_std) if bool((self.ctx_mask > 0).any()) else None
         g = self.unstd_glob(g_std, ctx)
         S = g.shape[0]
-        n = torch.exp(g[:, 1]).round().clamp(1, max_cells).long()
+        # CELL-COUNT BOUND. Tightest of the caller's `max_cells` and the per-species maximum seen
+        # in training (`n_max_pdg`, inf on pre-2026-09-14 checkpoints -> `max_cells` alone). The
+        # bound must stay FINITE: `g[:, 1]` is a draw from an unbounded Gaussian mixture in
+        # standardised log-n, so an untruncated exponential tail can ask for millions of cells.
+        # `n_trunc` is reported because truncation is otherwise invisible -- `partition` rescales
+        # the survivors to the sampled total, so a truncated shower looks energy-correct and has
+        # too few, too-hot cells.
+        n_cap = torch.minimum(torch.full_like(g[:, 1], float(max_cells)),
+                              self.n_max_pdg[pdg.long().clamp(0, self.n_max_pdg.shape[0] - 1)])
+        n_want = torch.exp(g[:, 1]).round()
+        n = torch.minimum(n_want, n_cap).clamp(min=1).long()
+        n_trunc = int((n_want > n_cap).sum())
         src = torch.repeat_interleave(torch.arange(S, device=g.device), n)
         # per-shower embeddings, then index by cell — cheaper than embedding every cell
         ce_p = self.cond_embed(cont_std, pdg, "points")
@@ -547,19 +700,43 @@ class CaloFlow(nn.Module):
                 rms = (r2 / n.to(pos.dtype)).sqrt()
                 pos = pos / rms[src].clamp(min=1e-6).unsqueeze(-1)
             pos = pos * g[:, 4].exp()[src].unsqueeze(-1)
+        core = g[:, 2:4] if g.shape[1] >= 4 else torch.zeros(S, 2, device=g.device)
+        if core_anchor is not None:
+            # the mixture predicted a small local residual; the physics prediction supplies the
+            # 1.5 m bending displacement it no longer has to learn
+            core = core + torch.as_tensor(core_anchor, dtype=core.dtype, device=core.device)
+        # (core is computed HERE rather than after the energy draw: the per-cell position
+        # conditioning below needs each cell's absolute eta, hence the shower core.)
         # tightest available bound per cell: the shared scalar and the cell's own species max
         lmax = torch.minimum(self.logE_max.expand(src.shape[0]),
                              self.logE_max_pdg[pdg.long().clamp(0, self.logE_max_pdg.shape[0] - 1)][src])
         # n[src] is the SAMPLED cell count of the shower this cell belongs to — the same count that
         # decided how many cells to draw, so the floor head's conditioning is self-consistent by
         # construction (no sampled-quantity mismatch of the kind that killed the 2x2 energy variants)
+        # PER-CELL POSITION for the energy head. The model samples a continuous GLOBAL depth and no
+        # detector id, but region and depth-within-section are a DETERMINISTIC function of that
+        # depth plus barrel-vs-endcap, and barrel-vs-endcap follows from the cell's own eta. So no
+        # new sampled quantity is introduced and the generated frame matches the training frame by
+        # construction -- the same reason the anchor is computed in `calo_geom` and shared.
+        # Validated on 41.65M real cells: region agreement 0.9951, SECTION agreement 1.00000,
+        # depth_local RMS error 1.2 mm (job 13033802 + the fit recorded at ETA_BARREL_CUT).
+        pos_feat = region = None
+        if self.energy.pos_dim or self.energy.n_regions:
+            if pos.shape[1] < 3:
+                raise ValueError("position-conditioned energy head needs a 3-D model (pos_dim>=3): "
+                                 "the depth column is what carries the ECAL/HCAL section")
+            from genpu.calo_geom import ETA_BARREL_CUT, depth_to_region_local
+            cell_eta = (cont_std[:, 1] * self.cont_std[1] + self.cont_mean[1])[src] + core[src, 0] + pos[:, 0]
+            reg_np, dloc_np = depth_to_region_local(pos[:, 2].detach().cpu().numpy(),
+                                                    (cell_eta.abs() < ETA_BARREL_CUT).detach().cpu().numpy())
+            region = torch.as_tensor(reg_np, dtype=torch.long, device=pos.device)
+            dloc = torch.as_tensor(dloc_np, dtype=pos.dtype, device=pos.device)
+            r2 = torch.zeros(S, device=pos.device).index_add_(0, src, (pos[:, :2] ** 2).sum(-1))
+            w = (r2 / n.to(pos.dtype)).sqrt().clamp(min=1e-6)
+            pos_feat = build_pos_feat(dloc, pos[:, :2].norm(dim=-1) / w[src],
+                                      self.pos_feat_mean, self.pos_feat_std)
         logE = self.energy.sample(ce_e[src], self.log_floor, glob_std=g_std[src], logE_max=lmax,
-                                  n_cells=n[src])
-        core = g[:, 2:4] if g.shape[1] >= 4 else torch.zeros(S, 2, device=g.device)
-        if core_anchor is not None:
-            # the mixture predicted a small local residual; the physics prediction supplies the
-            # 1.5 m bending displacement it no longer has to learn
-            core = core + torch.as_tensor(core_anchor, dtype=core.dtype, device=core.device)
+                                  n_cells=n[src], pos_feat=pos_feat, region=region)
         total = torch.exp(g[:, 0])
 
         if partition:
@@ -601,4 +778,4 @@ class CaloFlow(nn.Module):
         else:
             over = torch.zeros(S, dtype=torch.bool, device=g.device)
         return {"n": n, "src": src, "core": core, "pos": pos, "logE": logE, "total": total,
-                "scale_saturated": out_sat, "over_etrue": over}
+                "scale_saturated": out_sat, "over_etrue": over, "n_trunc": n_trunc}
