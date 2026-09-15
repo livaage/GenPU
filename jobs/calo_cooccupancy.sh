@@ -28,20 +28,23 @@ mkdir -p $GD
 # "under-merges", which was backwards and rested on the 7.2% within-shower
 # CONTRIBUTION sharing, a population the v2 slice already merges away.
 #
-# HYPOTHESIS: the excess sits in the shower CORE, which is where cells are
-# densest, and which `PointCFM` controls directly -- making it testable by
-# resampling rather than retraining.
+# RESULT (job 13931553): collisions ARE a core effect -- 0.1168 at r/width < 0.25 falling
+# monotonically to 0.0001 beyond 3 widths, a 1000x gradient with no flat component and nothing at
+# large radius. Both alternative branches are excluded.
 #
-# PRE-REGISTERED READING of the output profile:
-#   rising sharply toward r/width = 0   -> the CORE is too dense. Next step is a
-#                                          resampling test, no retrain.
-#   flat in r/width                     -> a GLOBAL density error, i.e. the whole
-#                                          cloud is too tight. Would be surprising:
-#                                          shower_width W/sigma is only 0.0505, so
-#                                          a pure width error is not indicated.
-#   rising at LARGE r/width             -> not anticipated; would point at the
-#                                          fringe, where cells are sparsest and
-#                                          collisions should be rarest.
+# BUT the pre-registered reading ("rising toward r=0 -> the core is too dense") was TOO STRONG, and
+# missed a third possibility. `PointCFM.sample` draws every cell from its own randn and integrates a
+# field that sees only that cell, so a shower's cells are i.i.d. given the conditioning -- and i.i.d.
+# draws collide EVEN AT EXACTLY THE RIGHT DENSITY (birthday argument). A real shower is a SET of
+# distinct channels, a draw without replacement, and cannot collide at all. Both "core too dense"
+# and "core density right, sampler wrong" predict a monotone rise toward the core.
+#
+# THIS RUN ADDS THE DISCRIMINATOR: within-shower nearest-neighbour SPACING, generated vs real.
+#   ratio ~1   -> density is RIGHT; the collisions are the i.i.d. sampler, and this becomes a second
+#                 and MECHANICAL argument for the set/attention head, independent of the coherence
+#                 result. Tuning core density would then be fitting a symptom.
+#   ratio << 1 -> the cloud really is too tight; a density/shape problem after all.
+# Real reference already measured: median 0.00314, p10 0.00128, p90 0.03707.
 #
 # The script also prints a PHYSICAL SANITY CHECK first (endcap cells inside
 # r = 315 mm must be ~0). That check exists because a probe that re-standardised

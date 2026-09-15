@@ -168,6 +168,23 @@ def main():
     print(f"{'r/width':>12} {'points':>10} {'collision':>10}")
     for i in range(len(edges) - 1):
         print(f"{edges[i]:>5.2f}-{edges[i+1]:<6.2f} {dens[i]:>10,} {prof[i]:>10.4f}")
+    # THE DISCRIMINATOR between "core too dense" and "i.i.d. sampler". PointCFM draws each cell
+    # independently, so collisions occur even at exactly the right density (birthday argument),
+    # while real showers are a set of DISTINCT channels and cannot collide at all. Matching NN
+    # spacing therefore means the density is right and the collisions are a sampling artifact;
+    # systematically smaller generated spacing means the cloud really is too tight.
+    gk = g_src < k
+    gen_nn = within_shower_nn(g_de[gk] - core[g_src[gk], 0], g_dp[gk] - core[g_src[gk], 1], g_src[gk])
+    print(f"\n  within-shower NN spacing  real median {np.median(real_nn):.5f}  "
+          f"gen median {np.median(gen_nn):.5f}  ratio {np.median(gen_nn)/max(np.median(real_nn),1e-12):.3f}")
+    print(f"    real p10/p90 {np.percentile(real_nn,10):.5f}/{np.percentile(real_nn,90):.5f}   "
+          f"gen p10/p90 {np.percentile(gen_nn,10):.5f}/{np.percentile(gen_nn,90):.5f}")
+    print("    ratio ~1 -> density is RIGHT, collisions are the i.i.d. sampler (set model needed).")
+    print("    ratio << 1 -> the cloud really is too tight (a density/shape problem).")
+    out["gen_nn"] = {"med": float(np.median(gen_nn)),
+                     "p10": float(np.percentile(gen_nn, 10)),
+                     "p90": float(np.percentile(gen_nn, 90)),
+                     "ratio_to_real": float(np.median(gen_nn) / max(np.median(real_nn), 1e-12))}
     out["gen"] = {"collision": round(float(gen_coll), 5),
                   "profile_edges": edges.tolist(),
                   "profile_rate": [round(float(v), 5) for v in prof],
