@@ -1,0 +1,366 @@
+{
+ "w": 1820,
+ "h": 1080,
+ "items": [
+  {
+   "x": 46,
+   "y": 54,
+   "text": "Two generative heads on one shared conditioning",
+   "size": 34,
+   "fill": "#12161c",
+   "bold": true,
+   "anchor": "start"
+  },
+  {
+   "x": 46,
+   "y": 88,
+   "text": "tracker: autoregressive transformer  \u00b7  calorimeter: flow matching  \u00b7  the detector is only the output",
+   "size": 21,
+   "fill": "#5b6673",
+   "bold": false,
+   "anchor": "start"
+  },
+  {
+   "x": 52,
+   "y": 150,
+   "text": "truth particle",
+   "size": 21,
+   "fill": "#12161c",
+   "bold": true,
+   "anchor": "start"
+  },
+  {
+   "x": 82,
+   "y": 193,
+   "text": "log pT",
+   "size": 17,
+   "fill": "#5b6673",
+   "bold": false,
+   "anchor": "start"
+  },
+  {
+   "x": 82,
+   "y": 220,
+   "text": "\u03b7",
+   "size": 17,
+   "fill": "#5b6673",
+   "bold": false,
+   "anchor": "start"
+  },
+  {
+   "x": 82,
+   "y": 247,
+   "text": "log E",
+   "size": 17,
+   "fill": "#5b6673",
+   "bold": false,
+   "anchor": "start"
+  },
+  {
+   "x": 82,
+   "y": 274,
+   "text": "q",
+   "size": 17,
+   "fill": "#5b6673",
+   "bold": false,
+   "anchor": "start"
+  },
+  {
+   "x": 82,
+   "y": 301,
+   "text": "m",
+   "size": 17,
+   "fill": "#5b6673",
+   "bold": false,
+   "anchor": "start"
+  },
+  {
+   "x": 82,
+   "y": 328,
+   "text": "vr",
+   "size": 17,
+   "fill": "#5b6673",
+   "bold": false,
+   "anchor": "start"
+  },
+  {
+   "x": 82,
+   "y": 355,
+   "text": "vz",
+   "size": 17,
+   "fill": "#5b6673",
+   "bold": false,
+   "anchor": "start"
+  },
+  {
+   "x": 82,
+   "y": 382,
+   "text": "PDG",
+   "size": 17,
+   "fill": "#5b6673",
+   "bold": false,
+   "anchor": "start"
+  },
+  {
+   "x": 150,
+   "y": 386,
+   "text": "MLP",
+   "size": 19,
+   "fill": "#0e9488",
+   "bold": true,
+   "anchor": "start"
+  },
+  {
+   "x": 273,
+   "y": 172,
+   "text": "c",
+   "size": 22,
+   "fill": "#0e9488",
+   "bold": true,
+   "anchor": "middle"
+  },
+  {
+   "x": 398,
+   "y": 168,
+   "text": "TRACKER HEAD",
+   "size": 24,
+   "fill": "#1f6feb",
+   "bold": true,
+   "anchor": "start"
+  },
+  {
+   "x": 1246,
+   "y": 168,
+   "text": "autoregressive transformer",
+   "size": 21,
+   "fill": "#5b6673",
+   "bold": false,
+   "anchor": "end"
+  },
+  {
+   "x": 1246,
+   "y": 194,
+   "text": "closest published model:  arXiv:2512.24254",
+   "size": 17,
+   "fill": "#5b6673",
+   "bold": false,
+   "anchor": "end"
+  },
+  {
+   "x": 406,
+   "y": 496,
+   "text": "causal self-attention  \u00d74",
+   "size": 18,
+   "fill": "#1f6feb",
+   "bold": false,
+   "anchor": "start"
+  },
+  {
+   "x": 710,
+   "y": 352,
+   "text": "layer (48) \u2192 surface",
+   "size": 18,
+   "fill": "#7c5cd6",
+   "bold": false,
+   "anchor": "start"
+  },
+  {
+   "x": 710,
+   "y": 450,
+   "text": "local x, y, z  \u00b7  512 bins",
+   "size": 18,
+   "fill": "#7c5cd6",
+   "bold": false,
+   "anchor": "start"
+  },
+  {
+   "x": 1004,
+   "y": 310,
+   "text": "2 heads",
+   "size": 19,
+   "fill": "#7c5cd6",
+   "bold": true,
+   "anchor": "start"
+  },
+  {
+   "x": 406,
+   "y": 258,
+   "text": "sampled hit fed back in",
+   "size": 18,
+   "fill": "#1f6feb",
+   "bold": false,
+   "anchor": "start"
+  },
+  {
+   "x": 398,
+   "y": 610,
+   "text": "CALORIMETER HEAD",
+   "size": 24,
+   "fill": "#e8871a",
+   "bold": true,
+   "anchor": "start"
+  },
+  {
+   "x": 1246,
+   "y": 610,
+   "text": "conditional flow matching",
+   "size": 21,
+   "fill": "#5b6673",
+   "bold": false,
+   "anchor": "end"
+  },
+  {
+   "x": 1246,
+   "y": 636,
+   "text": "closest published model:  CaloClouds II, arXiv:2309.05704",
+   "size": 17,
+   "fill": "#5b6673",
+   "bold": false,
+   "anchor": "end"
+  },
+  {
+   "x": 406,
+   "y": 638,
+   "text": "3 heads, no sequence",
+   "size": 19,
+   "fill": "#e8871a",
+   "bold": true,
+   "anchor": "start"
+  },
+  {
+   "x": 422,
+   "y": 706,
+   "text": "how big",
+   "size": 20,
+   "fill": "#b8860b",
+   "bold": true,
+   "anchor": "start"
+  },
+  {
+   "x": 424,
+   "y": 878,
+   "text": "mixture \u2192 total E, N points, core",
+   "size": 17,
+   "fill": "#5b6673",
+   "bold": false,
+   "anchor": "start"
+  },
+  {
+   "x": 712,
+   "y": 706,
+   "text": "where",
+   "size": 20,
+   "fill": "#e8871a",
+   "bold": true,
+   "anchor": "start"
+  },
+  {
+   "x": 714,
+   "y": 854,
+   "text": "velocity field, 50 Euler steps",
+   "size": 17,
+   "fill": "#5b6673",
+   "bold": false,
+   "anchor": "start"
+  },
+  {
+   "x": 714,
+   "y": 878,
+   "text": "noise \u2192 all points at once",
+   "size": 17,
+   "fill": "#5b6673",
+   "bold": false,
+   "anchor": "start"
+  },
+  {
+   "x": 1002,
+   "y": 706,
+   "text": "how bright",
+   "size": 20,
+   "fill": "#c2384a",
+   "bold": true,
+   "anchor": "start"
+  },
+  {
+   "x": 1004,
+   "y": 854,
+   "text": "Gaussian mixture over log E,",
+   "size": 17,
+   "fill": "#5b6673",
+   "bold": false,
+   "anchor": "start"
+  },
+  {
+   "x": 1004,
+   "y": 878,
+   "text": "truncated at the 50 keV cut",
+   "size": 17,
+   "fill": "#5b6673",
+   "bold": false,
+   "anchor": "start"
+  },
+  {
+   "x": 1322,
+   "y": 168,
+   "text": "output",
+   "size": 21,
+   "fill": "#12161c",
+   "bold": true,
+   "anchor": "start"
+  },
+  {
+   "x": 1330,
+   "y": 224,
+   "text": "hits, inner \u2192 outer",
+   "size": 18,
+   "fill": "#5b6673",
+   "bold": false,
+   "anchor": "start"
+  },
+  {
+   "x": 1330,
+   "y": 666,
+   "text": "energy deposits \u2014 a point cloud,",
+   "size": 18,
+   "fill": "#5b6673",
+   "bold": false,
+   "anchor": "start"
+  },
+  {
+   "x": 1330,
+   "y": 690,
+   "text": "NOT projected onto detector cells",
+   "size": 18,
+   "fill": "#c2384a",
+   "bold": false,
+   "anchor": "start"
+  },
+  {
+   "x": 406,
+   "y": 952,
+   "text": "each head also sees the one before it: globals \u2192 positions \u2192 energy",
+   "size": 18,
+   "fill": "#c2384a",
+   "bold": false,
+   "anchor": "start"
+  },
+  {
+   "x": 46,
+   "y": 1036,
+   "text": "flow matching: Lipman et al. arXiv:2210.02747  \u00b7  OT-CFM: Tong et al. arXiv:2302.00482  \u00b7  point-cloud calorimeter: CaloClouds arXiv:2305.04847, CaloClouds II arXiv:2309.05704",
+   "size": 17,
+   "fill": "#5b6673",
+   "bold": false,
+   "anchor": "start"
+  },
+  {
+   "x": 46,
+   "y": 1060,
+   "text": "tracker sequence model: arXiv:2512.24254  \u00b7  data + geometry: ColliderML / OpenDataDetector arXiv:2512.15230",
+   "size": 17,
+   "fill": "#5b6673",
+   "bold": false,
+   "anchor": "start"
+  }
+ ]
+}

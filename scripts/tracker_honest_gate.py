@@ -43,6 +43,9 @@ def main():
     ap.add_argument("--use_mom_feat", action="store_true", help="model uses helix-z momentum-estimate feature")
     ap.add_argument("--truth_count", action="store_true", help="ablation: use truth n_hits (old gate)")
     ap.add_argument("--count_no_d0", action="store_true", help="count head trained without d0")
+    ap.add_argument("--plots", action="store_true", help="write the gate ROC curve")
+    ap.add_argument("--outdir", default="/home/lv7805/genpu/plots/tracker/metrics")
+    ap.add_argument("--tag", default="tracker")
     args = ap.parse_args()
     dev = "cuda" if torch.cuda.is_available() else "cpu"; torch.manual_seed(0); rng = np.random.default_rng(0)
 
@@ -110,7 +113,30 @@ def main():
     for _ in range(800):
         opt.zero_grad(); l = torch.nn.functional.binary_cross_entropy_with_logits(clf(Xt[tri]).squeeze(-1), yt[tri]); l.backward(); opt.step()
     with torch.no_grad():
-        auc = rank_auc(clf(Xt[torch.as_tensor(te, device=dev)]).squeeze(-1).cpu().numpy(), y[te])
+        te_scores = clf(Xt[torch.as_tensor(te, device=dev)]).squeeze(-1).cpu().numpy()
+    auc = rank_auc(te_scores, y[te])
+    if args.plots:
+        # ROC of the two-sample event gate. The diagonal is the target: a generator the classifier
+        # cannot separate from Geant sits on it. Same held-out scores the AUC is computed from.
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from pathlib import Path as _P
+        o = np.argsort(-te_scores); yo = y[te][o]
+        tp = np.cumsum(yo); fp = np.cumsum(1.0 - yo)
+        tpr = np.concatenate([[0], tp / max(tp[-1], 1)]); fpr = np.concatenate([[0], fp / max(fp[-1], 1)])
+        fig, ax = plt.subplots(figsize=(6.0, 5.6))
+        ax.plot(fpr, tpr, lw=2.2, color="#1f6feb", label=f"8 event features   AUC {auc:.3f}")
+        ax.plot([0, 1], [0, 1], "k--", lw=1.4, label="indistinguishable (AUC 0.5)")
+        ax.set_xlabel("false positive rate (real called generated)")
+        ax.set_ylabel("true positive rate (generated called generated)")
+        ax.set_title(f"tracker two-sample event gate — {args.tag}\ncloser to the diagonal is better")
+        ax.legend(fontsize=9, loc="lower right"); ax.grid(alpha=0.3)
+        fig.tight_layout()
+        _P(args.outdir).mkdir(parents=True, exist_ok=True)
+        rp = _P(args.outdir) / f"roc_{args.tag}.png"
+        fig.savefig(rp, dpi=130); plt.close(fig)
+        print("wrote", rp, flush=True)
     names = ["n_hits", "layer_mean", "layer_std", "r_mean", "r_std", "z_std", "frac_inner", "hits_per_pion"]
     mode = "TRUTH-count (crutch)" if args.truth_count else "HONEST (count head, no truth n_hits)"
     print("=" * 62); print(f"TRACKER {mode}  pdg={args.pdg_class}"); print("=" * 62)

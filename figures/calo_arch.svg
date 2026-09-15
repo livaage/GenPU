@@ -1,0 +1,331 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1520" height="1084" viewBox="0 0 1520 1084">
+<defs>
+<marker id="a_ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,1 L10,5 L0,9 z" fill="#12161c"/></marker>
+<marker id="a_mut" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,1 L10,5 L0,9 z" fill="#5b6673"/></marker>
+<marker id="a_blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,1 L10,5 L0,9 z" fill="#1f6feb"/></marker>
+<marker id="a_teal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,1 L10,5 L0,9 z" fill="#0e9488"/></marker>
+<marker id="a_pur" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,1 L10,5 L0,9 z" fill="#7c5cd6"/></marker>
+<marker id="a_or" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,1 L10,5 L0,9 z" fill="#e8871a"/></marker>
+<marker id="a_red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,1 L10,5 L0,9 z" fill="#c2384a"/></marker>
+</defs>
+<rect width="1520" height="1084" fill="#ffffff"/>
+<text x="46.0" y="52.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="38" font-weight="700" fill="#12161c" fill-opacity="1.0" text-anchor="start">Calorimeter head</text>
+<text x="46.0" y="88.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="23" font-weight="500" fill="#5b6673" fill-opacity="1.0" text-anchor="start">a shower is a CLOUD, not a sequence — sample how big it is, then flow a cloud of cells into shape</text>
+<rect x="46" y="118" width="680" height="278" rx="16" fill="#f4f6f9" fill-opacity="1.0" stroke="#c9d1da" stroke-width="2"/>
+<text x="70.0" y="156.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="24" font-weight="700" fill="#12161c" fill-opacity="1.0" text-anchor="start">TRUTH PARTICLE LIST</text>
+<text x="70.0" y="184.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="19" font-weight="500" fill="#5b6673" fill-opacity="1.0" text-anchor="start">855 per event — 224 from the generator, 631 made by Geant4</text>
+<rect x="70" y="206" width="632" height="28" rx="8" fill="#ffffff" fill-opacity="1.0" stroke="#c9d1da" stroke-width="1.4"/>
+<rect x="82" y="204" width="117" height="29" rx="14" fill="#12161c" fill-opacity="0.16"/>
+<text x="140.6" y="227.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="18" font-weight="700" fill="#12161c" fill-opacity="1.0" text-anchor="middle">generator</text>
+<text x="207.2" y="227.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="18" font-weight="500" fill="#5b6673" fill-opacity="1.0" text-anchor="start">handed to Geant4 by the generator</text>
+<rect x="70" y="240" width="632" height="28" rx="8" fill="#ffffff" fill-opacity="1.0" stroke="#c9d1da" stroke-width="1.4"/>
+<rect x="82" y="238" width="139" height="29" rx="14" fill="#e8871a" fill-opacity="0.16"/>
+<text x="151.4" y="261.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="18" font-weight="700" fill="#e8871a" fill-opacity="1.0" text-anchor="middle">Geant4-made</text>
+<text x="228.8" y="261.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="18" font-weight="500" fill="#5b6673" fill-opacity="1.0" text-anchor="start">created in tracker material during transport</text>
+<rect x="70" y="274" width="632" height="28" rx="8" fill="#ffffff" fill-opacity="1.0" stroke="#c9d1da" stroke-width="1.4"/>
+<rect x="82" y="272" width="96" height="29" rx="14" fill="#5b6673" fill-opacity="0.16"/>
+<text x="129.8" y="295.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="18" font-weight="700" fill="#5b6673" fill-opacity="1.0" text-anchor="middle">in-calo</text>
+<text x="185.6" y="295.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="18" font-weight="500" fill="#5b6673" fill-opacity="1.0" text-anchor="start">shower product — lifted to its incident ancestor</text>
+<text x="70.0" y="324.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="19" font-weight="500" fill="#5b6673" fill-opacity="1.0" text-anchor="start">runs ONCE PER CALO-INCIDENT PARTICLE — 167 / event, 30% primary:</text>
+<text x="70.0" y="352.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="21" font-weight="700" fill="#e8871a" fill-opacity="1.0" text-anchor="start">log pT,  η,  log E,  q,  m,  vr,  vz   +   PDG class (17)</text>
+<text x="70.0" y="382.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="18" font-weight="500" fill="#5b6673" fill-opacity="1.0" text-anchor="start">after the lift, 46% of calo energy comes from a Geant4-made one</text>
+<path d="M746.0,166.0 L806.0,166.0" stroke="#5b6673" stroke-width="3" fill="none" marker-end="url(#a_mut)"/>
+<rect x="826" y="118" width="300" height="96" rx="16" fill="#f4f6f9" fill-opacity="1.0" stroke="#c9d1da" stroke-width="2"/>
+<text x="976.0" y="152.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="23" font-weight="700" fill="#12161c" fill-opacity="1.0" text-anchor="middle">conditioning MLP</text>
+<text x="976.0" y="186.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="22" font-weight="700" fill="#e8871a" fill-opacity="1.0" text-anchor="middle">c  —  128-d</text>
+<path d="M746.0,278.0 L806.0,278.0" stroke="#5b6673" stroke-width="3" fill="none" marker-end="url(#a_mut)"/>
+<rect x="826" y="230" width="300" height="96" rx="16" fill="#fff8ef" fill-opacity="1.0" stroke="#e8871a" stroke-width="2"/>
+<text x="976.0" y="264.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="23" font-weight="700" fill="#e8871a" fill-opacity="1.0" text-anchor="middle">helix anchor</text>
+<text x="976.0" y="294.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="19" font-weight="500" fill="#5b6673" fill-opacity="1.0" text-anchor="middle">truth track → calo face</text>
+<rect x="1166" y="118" width="308" height="278" rx="16" fill="#ffffff" fill-opacity="1.0" stroke="#c9d1da" stroke-width="2"/>
+<text x="1190.0" y="158.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="23" font-weight="700" fill="#12161c" fill-opacity="1.0" text-anchor="start">why an anchor?</text>
+<text x="1190.0" y="194.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="19" font-weight="500" fill="#5b6673" fill-opacity="1.0" text-anchor="start">the shower core sits ~1.5 m</text>
+<text x="1190.0" y="220.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="19" font-weight="500" fill="#5b6673" fill-opacity="1.0" text-anchor="start">from the particle's original</text>
+<text x="1190.0" y="246.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="19" font-weight="500" fill="#5b6673" fill-opacity="1.0" text-anchor="start">direction — that offset is</text>
+<text x="1190.0" y="272.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="19" font-weight="500" fill="#5b6673" fill-opacity="1.0" text-anchor="start">just the B-field bend.</text>
+<text x="1190.0" y="324.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="19" font-weight="500" fill="#5b6673" fill-opacity="1.0" text-anchor="start">extrapolate it exactly and</text>
+<text x="1190.0" y="350.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="19" font-weight="500" fill="#5b6673" fill-opacity="1.0" text-anchor="start">let the model learn only the</text>
+<text x="1190.0" y="376.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="19" font-weight="500" fill="#5b6673" fill-opacity="1.0" text-anchor="start">RESIDUAL around it.</text>
+<rect x="46" y="452" width="452" height="392" rx="16" fill="#ffffff" fill-opacity="1.0" stroke="#b8860b" stroke-width="2.5"/>
+<text x="70.0" y="496.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="26" font-weight="700" fill="#b8860b" fill-opacity="1.0" text-anchor="start">1.  how big?</text>
+<text x="70.0" y="526.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="20" font-weight="500" fill="#5b6673" fill-opacity="1.0" text-anchor="start">GlobalHead — Gaussian mixture (K=4)</text>
+<text x="70.0" y="554.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="19" font-weight="600" fill="#e8871a" fill-opacity="1.0" text-anchor="start">conditioned on c + the helix anchor</text>
+<rect x="70" y="562" width="404" height="48" rx="10" fill="#fffaf0" fill-opacity="1.0" stroke="#b8860b" stroke-width="1.8"/>
+<text x="88.0" y="592.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="22" font-weight="700" fill="#12161c" fill-opacity="1.0" text-anchor="start">total log E</text>
+<text x="456.0" y="592.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="19" font-weight="500" fill="#5b6673" fill-opacity="1.0" text-anchor="end">shower energy</text>
+<rect x="70" y="624" width="404" height="48" rx="10" fill="#fffaf0" fill-opacity="1.0" stroke="#b8860b" stroke-width="1.8"/>
+<text x="88.0" y="654.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="22" font-weight="700" fill="#12161c" fill-opacity="1.0" text-anchor="start">log N</text>
+<text x="456.0" y="654.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="19" font-weight="500" fill="#5b6673" fill-opacity="1.0" text-anchor="end">how many cells</text>
+<rect x="70" y="686" width="404" height="48" rx="10" fill="#fffaf0" fill-opacity="1.0" stroke="#b8860b" stroke-width="1.8"/>
+<text x="88.0" y="716.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="22" font-weight="700" fill="#12161c" fill-opacity="1.0" text-anchor="start">core η, φ</text>
+<text x="456.0" y="716.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="19" font-weight="500" fill="#5b6673" fill-opacity="1.0" text-anchor="end">offset from the anchor</text>
+<path d="M70.0,790.0 L75.1,790.0 L80.2,790.0 L85.3,790.0 L90.5,790.0 L95.6,790.0 L100.7,790.0 L105.8,790.0 L110.9,790.0 L116.0,790.0 L121.1,789.9 L126.3,789.9 L131.4,789.9 L136.5,789.9 L141.6,789.8 L146.7,789.8 L151.8,789.7 L156.9,789.7 L162.1,789.5 L167.2,789.3 L172.3,789.0 L177.4,788.5 L182.5,787.7 L187.6,786.3 L192.7,784.4 L197.8,781.5 L203.0,777.7 L208.1,772.9 L213.2,767.3 L218.3,761.1 L223.4,755.1 L228.5,749.7 L233.6,745.7 L238.8,743.7 L243.9,743.7 L249.0,745.8 L254.1,749.5 L259.2,754.2 L264.3,759.3 L269.4,764.0 L274.6,768.0 L279.7,771.1 L284.8,773.2 L289.9,774.5 L295.0,775.2 L300.1,775.3 L305.2,775.2 L310.4,775.0 L315.5,774.6 L320.6,774.3 L325.7,774.1 L330.8,774.0 L335.9,773.9 L341.0,773.9 L346.2,774.1 L351.3,774.3 L356.4,774.7 L361.5,775.1 L366.6,775.6 L371.7,776.2 L376.8,776.8 L381.9,777.5 L387.1,778.2 L392.2,779.0 L397.3,779.7 L402.4,780.5 L407.5,781.3 L412.6,782.1 L417.7,782.8 L422.9,783.5 L428.0,784.2 L433.1,784.9 L438.2,785.5 L443.3,786.0 L448.4,786.5 L453.5,787.0 L458.7,787.4 L463.8,787.8 L468.9,788.1 L474.0,788.4" stroke="#b8860b" stroke-width="3" fill="none"/>
+<text x="272.0" y="814.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="18" font-weight="500" fill="#5b6673" fill-opacity="1.0" text-anchor="middle">peak + heavy tail → a mixture, not one Gaussian</text>
+<rect x="534" y="452" width="452" height="392" rx="16" fill="#ffffff" fill-opacity="1.0" stroke="#e8871a" stroke-width="2.5"/>
+<text x="558.0" y="496.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="26" font-weight="700" fill="#e8871a" fill-opacity="1.0" text-anchor="start">2.  where do the cells go?</text>
+<text x="558.0" y="526.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="20" font-weight="500" fill="#5b6673" fill-opacity="1.0" text-anchor="start">PointCFM — conditional flow matching</text>
+<rect x="558" y="556" width="116" height="116" rx="12" fill="#f4f6f9" fill-opacity="1.0" stroke="#c9d1da" stroke-width="1.6"/>
+<circle cx="608.3" cy="629.4" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="609.2" cy="604.5" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="588.0" cy="607.6" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="649.5" cy="626.8" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="647.3" cy="621.5" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="627.9" cy="619.6" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="565.8" cy="639.8" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="631.3" cy="629.0" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="565.0" cy="561.4" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="589.2" cy="599.9" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="625.2" cy="612.6" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="631.7" cy="594.6" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="625.3" cy="625.9" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="596.1" cy="665.8" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="632.8" cy="650.1" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="597.3" cy="591.7" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="605.6" cy="610.8" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="635.1" cy="621.5" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="602.5" cy="585.1" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="600.3" cy="650.8" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="591.6" cy="621.4" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="628.9" cy="569.1" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="617.5" cy="653.4" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="555.2" cy="604.3" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="612.8" cy="589.4" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="631.0" cy="612.1" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="571.8" cy="639.0" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="636.2" cy="642.5" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="659.4" cy="624.9" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="619.6" cy="574.8" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="634.6" cy="595.5" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="602.3" cy="575.9" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="586.8" cy="598.0" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="654.9" cy="552.7" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="572.0" cy="621.2" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="659.5" cy="631.4" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="558.7" cy="538.1" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="626.8" cy="591.8" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="582.2" cy="643.5" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="649.2" cy="618.7" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="623.4" cy="627.1" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="664.1" cy="632.7" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="631.6" cy="630.5" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="568.7" cy="652.7" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="644.8" cy="630.0" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="556.5" cy="594.9" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="641.4" cy="559.4" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="610.4" cy="644.7" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="576.5" cy="662.6" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="632.6" cy="609.5" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="625.8" cy="633.6" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="619.6" cy="648.6" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="596.0" cy="601.5" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="647.4" cy="614.8" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="589.4" cy="642.5" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="660.2" cy="600.6" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="574.4" cy="609.9" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="611.5" cy="605.0" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="658.4" cy="583.0" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<circle cx="654.0" cy="575.7" r="2.6" fill="#e8871a" fill-opacity="0.35"/>
+<text x="616.0" y="698.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="20" font-weight="600" fill="#5b6673" fill-opacity="1.0" text-anchor="middle">t = 0</text>
+<path d="M680.0,614.0 L702.0,614.0" stroke="#e8871a" stroke-width="2.6" fill="none" marker-end="url(#a_or)"/>
+<rect x="708" y="556" width="116" height="116" rx="12" fill="#f4f6f9" fill-opacity="1.0" stroke="#c9d1da" stroke-width="1.6"/>
+<circle cx="760.6" cy="623.8" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="770.3" cy="612.1" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="755.9" cy="611.3" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="785.8" cy="622.3" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="783.0" cy="618.7" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="777.0" cy="616.8" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="746.8" cy="628.8" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="785.6" cy="622.6" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="740.7" cy="586.5" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="754.8" cy="610.0" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="771.2" cy="614.6" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="785.0" cy="595.8" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="767.5" cy="620.8" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="760.2" cy="640.7" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="774.6" cy="634.2" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="760.3" cy="601.1" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="774.8" cy="613.6" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="775.1" cy="617.4" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="760.4" cy="599.4" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="747.2" cy="630.8" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="760.9" cy="613.8" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="774.4" cy="594.7" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="773.1" cy="638.6" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="729.7" cy="608.0" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="765.0" cy="603.7" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="781.0" cy="604.2" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="751.4" cy="621.7" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="781.7" cy="623.3" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="790.8" cy="623.4" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="769.3" cy="595.0" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="781.4" cy="605.2" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="761.0" cy="600.0" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="758.7" cy="605.0" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="800.9" cy="579.6" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="750.7" cy="616.7" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="790.7" cy="625.1" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="740.7" cy="578.1" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="766.3" cy="597.9" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="754.3" cy="625.5" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="779.9" cy="611.5" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="778.1" cy="623.0" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="799.4" cy="620.2" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="776.1" cy="618.5" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="748.3" cy="638.6" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="778.4" cy="627.2" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="743.3" cy="603.9" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="771.4" cy="591.4" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="765.0" cy="627.4" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="750.4" cy="639.6" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="783.8" cy="608.4" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="778.6" cy="628.7" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="777.1" cy="630.7" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="754.7" cy="611.1" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="784.5" cy="614.8" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="761.9" cy="627.4" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="779.3" cy="606.0" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="738.5" cy="614.7" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="767.5" cy="607.5" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="789.4" cy="601.3" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<circle cx="787.7" cy="599.3" r="3.7" fill="#e8871a" fill-opacity="0.62"/>
+<text x="766.0" y="698.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="20" font-weight="600" fill="#5b6673" fill-opacity="1.0" text-anchor="middle">t = ½</text>
+<path d="M830.0,614.0 L852.0,614.0" stroke="#e8871a" stroke-width="2.6" fill="none" marker-end="url(#a_or)"/>
+<rect x="858" y="556" width="116" height="116" rx="12" fill="#f4f6f9" fill-opacity="1.0" stroke="#c9d1da" stroke-width="1.6"/>
+<circle cx="912.9" cy="618.2" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="931.4" cy="619.7" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="923.9" cy="614.9" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="922.0" cy="617.8" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="918.8" cy="615.8" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="926.1" cy="614.0" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="927.9" cy="617.8" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="939.9" cy="616.2" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="916.4" cy="611.5" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="920.4" cy="620.1" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="917.3" cy="616.6" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="938.3" cy="597.0" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="909.7" cy="615.6" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="924.4" cy="615.6" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="916.4" cy="618.3" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="923.2" cy="610.5" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="944.0" cy="616.4" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="915.2" cy="613.3" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="918.3" cy="613.6" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="894.2" cy="610.8" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="930.3" cy="606.2" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="919.9" cy="620.3" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="928.8" cy="623.9" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="904.1" cy="611.7" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="917.2" cy="618.1" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="931.1" cy="596.2" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="931.0" cy="604.4" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="927.1" cy="604.1" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="922.2" cy="621.9" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="919.1" cy="615.3" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="928.2" cy="614.9" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="919.7" cy="624.2" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="930.6" cy="612.1" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="947.0" cy="606.4" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="929.4" cy="612.2" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="921.8" cy="618.7" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="922.7" cy="618.2" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="905.8" cy="604.0" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="926.5" cy="607.6" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="910.6" cy="604.2" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="932.7" cy="619.0" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="934.7" cy="607.8" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="920.5" cy="606.4" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="927.9" cy="624.5" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="911.9" cy="624.4" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="930.1" cy="612.8" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="901.5" cy="623.3" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="919.6" cy="610.0" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="924.4" cy="616.7" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="935.0" cy="607.2" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="931.5" cy="623.9" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="934.5" cy="612.8" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="913.3" cy="620.8" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="921.6" cy="614.8" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="934.3" cy="612.3" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="898.4" cy="611.4" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="902.6" cy="619.4" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="923.6" cy="609.9" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="920.4" cy="619.5" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<circle cx="921.3" cy="622.8" r="4.8" fill="#e8871a" fill-opacity="0.90"/>
+<text x="916.0" y="698.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="20" font-weight="600" fill="#5b6673" fill-opacity="1.0" text-anchor="middle">t = 1</text>
+<text x="558.0" y="726.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="20" font-weight="600" fill="#12161c" fill-opacity="1.0" text-anchor="start">Gaussian noise → shower cloud,</text>
+<text x="558.0" y="752.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="20" font-weight="600" fill="#12161c" fill-opacity="1.0" text-anchor="start">in 50 Euler steps</text>
+<text x="558.0" y="786.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="22" font-weight="700" fill="#e8871a" fill-opacity="1.0" text-anchor="start">per cell:  Δη,  Δφ,  depth</text>
+<text x="558.0" y="812.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="19" font-weight="500" fill="#5b6673" fill-opacity="1.0" text-anchor="start">i.i.d. given (c, globals) — no ordering</text>
+<rect x="1022" y="452" width="452" height="392" rx="16" fill="#ffffff" fill-opacity="1.0" stroke="#c2384a" stroke-width="2.5"/>
+<text x="1046.0" y="496.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="26" font-weight="700" fill="#c2384a" fill-opacity="1.0" text-anchor="start">3.  how much energy each?</text>
+<text x="1046.0" y="526.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="20" font-weight="500" fill="#5b6673" fill-opacity="1.0" text-anchor="start">EnergyHead — per cell log E</text>
+<rect x="1056" y="560" width="384" height="128" rx="12" fill="#f4f6f9" fill-opacity="1.0" stroke="#c9d1da" stroke-width="1.6"/>
+<path d="M1150.0,680.0 L1150.0,657.2 L1154.6,653.9 L1159.2,650.3 L1163.8,646.4 L1168.4,642.3 L1173.1,638.0 L1177.7,633.5 L1182.3,629.0 L1186.9,624.4 L1191.5,619.9 L1196.1,615.4 L1200.7,611.2 L1205.3,607.2 L1209.9,603.5 L1214.5,600.3 L1219.2,597.5 L1223.8,595.2 L1228.4,593.5 L1233.0,592.4 L1237.6,592.0 L1242.2,592.2 L1246.8,593.1 L1251.4,594.5 L1256.0,596.6 L1260.6,599.2 L1265.3,602.3 L1269.9,605.9 L1274.5,609.7 L1279.1,613.9 L1283.7,618.3 L1288.3,622.8 L1292.9,627.4 L1297.5,631.9 L1302.1,636.4 L1306.7,640.8 L1311.4,645.0 L1316.0,648.9 L1320.6,652.6 L1325.2,656.1 L1329.8,659.3 L1334.4,662.1 L1339.0,664.7 L1343.6,667.0 L1348.2,669.1 L1352.8,670.9 L1357.5,672.4 L1362.1,673.8 L1366.7,674.9 L1371.3,675.9 L1375.9,676.7 L1380.5,677.3 L1385.1,677.9 L1389.7,678.3 L1394.3,678.7 L1398.9,679.0 L1403.6,679.2 L1408.2,679.4 L1412.8,679.5 L1417.4,679.7 L1422.0,679.7" stroke="#c2384a" stroke-width="3" fill="none"/>
+<line x1="1150.0" y1="570" x2="1150.0" y2="680" stroke="#c2384a" stroke-width="2" stroke-dasharray="7 6"/>
+<text x="1062.0" y="714.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="18" font-weight="700" fill="#c2384a" fill-opacity="1.0" text-anchor="start">50 keV cut</text>
+<text x="1440.0" y="714.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="18" font-weight="600" fill="#5b6673" fill-opacity="1.0" text-anchor="end">log E →</text>
+<text x="1046.0" y="752.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="22" font-weight="700" fill="#c2384a" fill-opacity="1.0" text-anchor="start">at-floor Bernoulli + mixture</text>
+<text x="1046.0" y="782.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="19" font-weight="500" fill="#5b6673" fill-opacity="1.0" text-anchor="start">zero-suppression truncates the</text>
+<text x="1046.0" y="804.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="19" font-weight="500" fill="#5b6673" fill-opacity="1.0" text-anchor="start">spectrum; the edge is modelled</text>
+<text x="1046.0" y="826.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="19" font-weight="500" fill="#5b6673" fill-opacity="1.0" text-anchor="start">separately from the bulk.</text>
+<path d="M242.0,426 L242.0,452" stroke="#5b6673" stroke-width="2.6" fill="none" marker-end="url(#a_mut)"/>
+<path d="M730.0,426 L730.0,452" stroke="#5b6673" stroke-width="2.6" fill="none" marker-end="url(#a_mut)"/>
+<path d="M1218.0,426 L1218.0,452" stroke="#5b6673" stroke-width="2.6" fill="none" marker-end="url(#a_mut)"/>
+<path d="M1126,166 L1146,166 L1146,426 L242.0,426 M1146,426 L1218.0,426" stroke="#5b6673" stroke-width="2.6" fill="none"/>
+<text x="1156.0" y="420.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="21" font-weight="700" fill="#5b6673" fill-opacity="1.0" text-anchor="start">c</text>
+<path d="M976,326 L976,408 L312.0,408 L312.0,452" stroke="#e8871a" stroke-width="2.6" fill="none" marker-end="url(#a_or)"/>
+<text x="748.0" y="402.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="18" font-weight="600" fill="#e8871a" fill-opacity="1.0" text-anchor="start">anchor → head 1 only</text>
+<rect x="46" y="878" width="1428" height="106" rx="16" fill="#f4f6f9" fill-opacity="1.0" stroke="#c9d1da" stroke-width="2"/>
+<text x="74.0" y="922.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="26" font-weight="700" fill="#12161c" fill-opacity="1.0" text-anchor="start">shower</text>
+<text x="74.0" y="954.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="20" font-weight="500" fill="#5b6673" fill-opacity="1.0" text-anchor="start">N cells</text>
+<circle cx="396.8" cy="952.8" r="3.8" fill="#e8871a" fill-opacity="0.85"/>
+<circle cx="441.0" cy="922.0" r="5.7" fill="#e8871a" fill-opacity="0.85"/>
+<circle cx="302.4" cy="910.3" r="5.5" fill="#e8871a" fill-opacity="0.85"/>
+<circle cx="453.4" cy="920.3" r="6.2" fill="#e8871a" fill-opacity="0.85"/>
+<circle cx="390.0" cy="931.4" r="5.6" fill="#e8871a" fill-opacity="0.85"/>
+<circle cx="401.9" cy="933.6" r="7.8" fill="#e8871a" fill-opacity="0.85"/>
+<circle cx="427.6" cy="952.0" r="7.4" fill="#e8871a" fill-opacity="0.85"/>
+<circle cx="356.7" cy="925.8" r="6.1" fill="#e8871a" fill-opacity="0.85"/>
+<circle cx="314.4" cy="920.0" r="3.6" fill="#e8871a" fill-opacity="0.85"/>
+<circle cx="363.5" cy="926.4" r="4.7" fill="#e8871a" fill-opacity="0.85"/>
+<circle cx="408.6" cy="908.4" r="6.4" fill="#e8871a" fill-opacity="0.85"/>
+<circle cx="407.2" cy="887.9" r="5.7" fill="#e8871a" fill-opacity="0.85"/>
+<circle cx="353.1" cy="916.6" r="6.1" fill="#e8871a" fill-opacity="0.85"/>
+<circle cx="379.9" cy="911.5" r="6.2" fill="#e8871a" fill-opacity="0.85"/>
+<circle cx="277.3" cy="938.6" r="7.2" fill="#e8871a" fill-opacity="0.85"/>
+<circle cx="488.6" cy="898.6" r="4.6" fill="#e8871a" fill-opacity="0.85"/>
+<circle cx="284.0" cy="914.5" r="8.0" fill="#e8871a" fill-opacity="0.85"/>
+<circle cx="417.2" cy="939.7" r="5.7" fill="#e8871a" fill-opacity="0.85"/>
+<circle cx="434.6" cy="938.5" r="3.4" fill="#e8871a" fill-opacity="0.85"/>
+<circle cx="355.9" cy="901.4" r="8.4" fill="#e8871a" fill-opacity="0.85"/>
+<circle cx="446.6" cy="958.2" r="7.0" fill="#e8871a" fill-opacity="0.85"/>
+<circle cx="467.1" cy="964.4" r="8.8" fill="#e8871a" fill-opacity="0.85"/>
+<circle cx="424.4" cy="980.5" r="5.4" fill="#e8871a" fill-opacity="0.85"/>
+<circle cx="242.9" cy="936.8" r="8.0" fill="#e8871a" fill-opacity="0.85"/>
+<circle cx="429.2" cy="950.1" r="6.1" fill="#e8871a" fill-opacity="0.85"/>
+<circle cx="381.8" cy="943.2" r="4.9" fill="#e8871a" fill-opacity="0.85"/>
+<circle cx="398.2" cy="928.1" r="6.3" fill="#e8871a" fill-opacity="0.85"/>
+<circle cx="390.8" cy="933.4" r="5.0" fill="#e8871a" fill-opacity="0.85"/>
+<circle cx="355.6" cy="915.2" r="3.4" fill="#e8871a" fill-opacity="0.85"/>
+<circle cx="491.2" cy="928.7" r="8.8" fill="#e8871a" fill-opacity="0.85"/>
+<circle cx="432.3" cy="941.6" r="3.2" fill="#e8871a" fill-opacity="0.85"/>
+<circle cx="407.5" cy="916.4" r="3.8" fill="#e8871a" fill-opacity="0.85"/>
+<circle cx="298.9" cy="952.7" r="7.9" fill="#e8871a" fill-opacity="0.85"/>
+<circle cx="398.4" cy="943.4" r="8.5" fill="#e8871a" fill-opacity="0.85"/>
+<circle cx="327.1" cy="918.7" r="3.5" fill="#e8871a" fill-opacity="0.85"/>
+<circle cx="474.3" cy="942.8" r="5.6" fill="#e8871a" fill-opacity="0.85"/>
+<circle cx="510.3" cy="952.7" r="6.8" fill="#e8871a" fill-opacity="0.85"/>
+<circle cx="406.9" cy="924.1" r="8.1" fill="#e8871a" fill-opacity="0.85"/>
+<circle cx="494.7" cy="948.2" r="5.7" fill="#e8871a" fill-opacity="0.85"/>
+<circle cx="364.9" cy="953.5" r="8.6" fill="#e8871a" fill-opacity="0.85"/>
+<circle cx="396.9" cy="942.5" r="6.2" fill="#e8871a" fill-opacity="0.85"/>
+<circle cx="401.8" cy="941.6" r="4.0" fill="#e8871a" fill-opacity="0.85"/>
+<circle cx="433.2" cy="936.2" r="4.9" fill="#e8871a" fill-opacity="0.85"/>
+<circle cx="370.3" cy="963.8" r="4.7" fill="#e8871a" fill-opacity="0.85"/>
+<circle cx="367.5" cy="932.0" r="5.1" fill="#e8871a" fill-opacity="0.85"/>
+<circle cx="439.2" cy="933.7" r="3.1" fill="#e8871a" fill-opacity="0.85"/>
+<text x="560.0" y="924.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="22" font-weight="600" fill="#12161c" fill-opacity="1.0" text-anchor="start">= anchor  +  core offset  +  per-cell (Δη, Δφ, depth),</text>
+<text x="560.0" y="954.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="21" font-weight="500" fill="#5b6673" fill-opacity="1.0" text-anchor="start">each carrying its own log E — a point cloud, never projected onto cells</text>
+<text x="46.0" y="1032.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="19" font-weight="500" fill="#5b6673" fill-opacity="1.0" text-anchor="start">an event is the union of these per-particle responses — the tracker and calo heads are independent and never see each other.</text>
+<text x="46.0" y="1058.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="19" font-weight="500" fill="#5b6673" fill-opacity="1.0" text-anchor="start">the secondary list with its true vertices is Geant's own output, so this is detector RESPONSE given a truth particle list.</text>
+</svg>
