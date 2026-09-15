@@ -73,6 +73,18 @@ def main():
                          "any re-attributed model: stage2 gives one shower per DIRECT depositor, "
                          "and 64.8%% of those are fragments born inside the calorimeter.")
     ap.add_argument("--steps", type=int, default=50)
+    ap.add_argument("--snap_cells", action="store_true",
+                    help="project generated points onto real ODD cells and merge co-occupants "
+                         "(genpu.calo_cells). Validated on real cells: round-trip recovers the same "
+                         "cell id 0.9925 of the time, energy conserved to 1e-6, and within one event "
+                         "the id map collides on only 0.0004. OFF by default so numbers stay "
+                         "comparable to pre-2026-09-15 runs.")
+    ap.add_argument("--max_cells", type=int, default=128,
+                    help="cap on generated cells per shower. The historical default 128 truncates "
+                         "2.10%% of real showers / 6.87%% of all cells on multispecies_v2 and is "
+                         "hadron-selective (pbar 21.3%% of cells, mu± 0.00%%). Raise it to measure "
+                         "what the cap was costing; the model's per-class n_max_pdg (when the "
+                         "checkpoint carries one) still applies on top.")
     ap.add_argument("--batch", type=int, default=200000)
     ap.add_argument("--tag", default="photon")
     ap.add_argument("--logE_max", type=float, default=None,
@@ -97,7 +109,17 @@ def main():
     ap.add_argument("--geometry", default=None,
                     help="calo_geometry.json for the helix core anchor (default: repo root). Only "
                          "used when the checkpoint was trained on a --core_anchor helix slice.")
+    ap.add_argument("--dump_features", default=None,
+                    help="npz to write the PAIRED per-event gate feature matrices to (real, gen, "
+                         "event_id, n_src). The composite gate can sit at 0.81 while no single "
+                         "feature exceeds 0.58, so the joint structure has to be read separately "
+                         "-- scripts/calo_gate_diagnose.py consumes this file.")
     ap.add_argument("--outdir", default="/home/lv7805/genpu/plots/calo/metrics")
+    ap.add_argument("--plots", action="store_true",
+                    help="write real-vs-generated marginal histograms next to the metrics json. "
+                         "Lives HERE, not in eval_calo_flow.py, because this is the path that "
+                         "passes the helix anchor to sample_showers -- eval_calo_flow.py never "
+                         "learned about it and raises on a core-anchored checkpoint.")
     args = ap.parse_args()
     dev = "cuda" if torch.cuda.is_available() else "cpu"; torch.manual_seed(0); rng = np.random.default_rng(0)
 
@@ -129,7 +151,7 @@ def main():
     if args.logE_max_slice:
         sd_ = np.load(args.logE_max_slice)
         pts_pdg = np.repeat(sd_["pdg"].astype(np.int64), np.diff(sd_["offsets"]))
-        le_ = sd_["points_flat"][:, 2]
+        le_ = sd_["points_flat"][:, -1]   # LAST column = energy; index 2 is DEPTH under v2
         for c in np.unique(pts_pdg):
             model.logE_max_pdg[int(c)] = float(le_[pts_pdg == c].max())
         shown = {int(c): round(float(model.logE_max_pdg[int(c)]), 2) for c in np.unique(pts_pdg)}
@@ -151,9 +173,26 @@ def main():
         p_phi = sd["p_phi"].astype(np.float64)
         E_true = sd["E_true"].astype(np.float64)
         eid_sh = sd["event_id"]
-        off = sd["offsets"]
+        off = sd["offsets"].astype(np.int64)
         pts, glob = sd["points_flat"], sd["glob"]
         anc_sl = sd["anchor"]; amode_sl = sd["anchor_mode"]
+        # SPECIES FILTER. A multi-species v2 slice carries every class, so --pdg_class has to select
+        # the population being scored -- without this a per-species number would silently be an
+        # all-species one. COMPACT the CSR arrays rather than carrying an index set: every stage
+        # below (generation batching, the real per-shower loop, the longitudinal profile) assumes
+        # `sel` is arange over dense arrays, exactly as the raw-stage2 branch builds it.
+        keep = np.where(np.isin(pdg, args.pdg_class))[0]
+        if len(keep) < len(pdg):
+            cnt = off[keep + 1] - off[keep]
+            ci = (np.repeat(off[keep], cnt)
+                  + (np.arange(cnt.sum()) - np.repeat(np.cumsum(cnt) - cnt, cnt)))
+            pts = pts[ci]
+            off = np.concatenate([[0], np.cumsum(cnt)]).astype(np.int64)
+            cont, pdg, glob = cont[keep], pdg[keep], glob[keep]
+            p_eta, p_phi, E_true, eid_sh = p_eta[keep], p_phi[keep], E_true[keep], eid_sh[keep]
+            anc_sl, amode_sl = anc_sl[keep], amode_sl[keep]
+            print(f"species filter {args.pdg_class}: {len(keep):,} of {len(sd['pdg']):,} showers, "
+                  f"{len(pts):,} cells")
         # points are core-relative deltas from (particle + anchor); undo to absolute cell eta/phi
         src = np.repeat(np.arange(len(off) - 1), np.diff(off))
         ch = np.empty((len(pts), 5), np.float32)
@@ -208,7 +247,7 @@ def main():
               f"{'; GlobalHead conditioned on the anchor' if model.anchor_cond else ''}")
     # generate (batched) + time it
     gen_eta, gen_phi, gen_E, gen_src, gen_depth = [], [], [], [], []
-    n_sat = 0; n_over = 0
+    n_sat = 0; n_over = 0; n_trunc = 0
     E_trueT = torch.as_tensor(E_true, dtype=torch.float32, device=dev)
     torch.cuda.synchronize() if dev == "cuda" else None
     t0 = time.time()
@@ -216,6 +255,7 @@ def main():
         e = min(s + args.batch, len(sel))
         with torch.no_grad():
             sh = model.sample_showers(contS[s:e], pdgT[s:e], steps=args.steps,
+                                      max_cells=args.max_cells,
                                       partition=not args.no_partition,
                                       e_true=None if args.no_econs else E_trueT[s:e],
                                       width_renorm=args.width_renorm,
@@ -231,8 +271,11 @@ def main():
         if pos.shape[1] >= 3:
             gen_depth.append(pos[:, 2])
         n_sat += int(sh["scale_saturated"].sum()); n_over += int(sh["over_etrue"].sum())
+        n_trunc += int(sh["n_trunc"])
     torch.cuda.synchronize() if dev == "cuda" else None
     gen_time = time.time() - t0
+    print(f"cell-count cap: max_cells={args.max_cells}  truncated {n_trunc:,} / {len(sel):,} showers "
+          f"({100 * n_trunc / max(len(sel), 1):.3f}%)  [real >128 rate on multispecies_v2: 2.10%]")
     gen_depth = np.concatenate(gen_depth) if gen_depth else None
     has_depth = (r_depth is not None) and (gen_depth is not None)
     if (r_depth is not None) != (gen_depth is not None):
@@ -240,6 +283,36 @@ def main():
               f"gen={gen_depth is not None}) -- depth observables SKIPPED. A 3D model scored "
               f"against a 2D reference, or vice versa, is not a valid comparison.")
     gen_E = np.concatenate(gen_E); gen_eta = np.concatenate(gen_eta); gen_phi = np.concatenate(gen_phi); gen_src = np.concatenate(gen_src)
+
+    # ---- CELL PROJECTION (PIPELINE gap #1). Deliberately a SEPARATE deterministic step after the
+    # continuous sample, which is what pileup_generator_plan.md:257 specifies. Off by default so
+    # every number stays comparable to the pre-2026-09-15 runs; turn it on to score a generator
+    # whose cells actually exist.
+    snap_report = None
+    if args.snap_cells:
+        if gen_depth is None:
+            raise SystemExit("--snap_cells needs a 3-D model (the depth column carries the layer)")
+        from genpu.calo_cells import snap_and_merge
+        n_before = len(gen_E)
+        sm = snap_and_merge(gen_eta, gen_phi, gen_depth, gen_E, src=gen_src)
+        gen_eta_s = np.arcsinh(sm["z"] / np.maximum(np.hypot(sm["x"], sm["y"]), 1e-9))
+        gen_phi_s = np.arctan2(sm["y"], sm["x"])
+        e_before = gen_E.sum()
+        gen_eta, gen_phi, gen_E, gen_src = gen_eta_s, gen_phi_s, sm["energy"], sm["src"]
+        # depth is now a layer index, not the continuous coordinate the real reference carries, so
+        # the depth observables must be dropped. `has_depth` was already computed above, hence the
+        # explicit reset -- leaving it True with gen_depth None crashes the depth gate.
+        gen_depth = None
+        has_depth = False
+        snap_report = {"cells_before": int(n_before), "cells_after": int(len(gen_E)),
+                       "merged_frac": round(1 - len(gen_E) / max(n_before, 1), 5),
+                       "energy_ratio": round(float(gen_E.sum() / max(e_before, 1e-12)), 6),
+                       "multi_contrib_frac": round(float(np.mean(sm["n_merged"] > 1)), 5)}
+        print(f"cell projection: {n_before:,} points -> {len(gen_E):,} cells "
+              f"(merged {snap_report['merged_frac']:.4f}), energy x{snap_report['energy_ratio']:.6f}, "
+              f"cells with >1 contributor {snap_report['multi_contrib_frac']:.4f}")
+        print("  NOTE depth observables are SKIPPED under --snap_cells (the snapped depth is a "
+              "layer index, not the continuous coordinate the real reference carries).")
 
     # ---- real pooled + per-shower ----
     RE, RP, RG = [], [], []; r_n = np.zeros(len(sel)); r_Ereco = np.zeros(len(sel)); r_width = np.zeros(len(sel))
@@ -252,8 +325,35 @@ def main():
     # gen per-shower
     g_n_arr = np.bincount(gen_src, minlength=len(sel)).astype(float)
     g_Ereco = np.bincount(gen_src, weights=gen_E, minlength=len(sel))
-    g_de = gen_eta - p_eta[gen_src]; g_dp = gen_phi - p_phi[gen_src]
+    # WRAP the phi difference. Without `--snap_cells`, `gen_phi` is the UNWRAPPED sum
+    # p_phi + core + pos, so a bare subtraction is already small and wrap_pi is a no-op. With
+    # `--snap_cells`, `gen_phi` is recomputed as arctan2(y, x) and therefore lives in (-pi, pi],
+    # so every shower near +-pi picked up a ~2pi difference. That one missing wrap moved
+    # `width_std` 0.5016 -> 0.9565, `width_mean` 0.5618 -> 0.9032 and the d_phi Wasserstein
+    # 0.0343 -> 0.4025 in job 13928711, which looked exactly like a real physics regression.
+    # Wrapping unconditionally is correct for both paths: cell d_phi is always << pi.
+    from genpu.calo_geom import wrap_pi as _wrap
+    g_de = gen_eta - p_eta[gen_src]; g_dp = _wrap(gen_phi - p_phi[gen_src])
     g_width = np.sqrt(np.bincount(gen_src, weights=g_de**2 + g_dp**2, minlength=len(sel)) / np.maximum(g_n_arr, 1))
+
+    # (0) THE FLOOR EDGE, real vs generated (2026-09-07). `frac_near_floor` in the gate is a wide
+    # band (`logE < LF+0.5`, 3.79% of real e± cells) and cannot see WHERE in that band the cells
+    # sit. These three separate the mechanisms: `at` is the point-mass artefact (real = 0.000000
+    # exactly, over 13.05M held-out e± cells), `sub` is the physical shared-cell tail below the
+    # threshold (real 0.387%), `near` is the gate's band. A model that drops the atom should move
+    # `at` to ~0 and must be checked for SMEARING, which shows up as `sub` running above real.
+    _LF = np.log(5e-5)
+    _gl = np.log(gen_E + 1e-12)
+    floor_edge = {
+        "at_floor_real": round(float(np.mean(np.abs(RE - _LF) < 1e-6)), 6),
+        "at_floor_gen": round(float(np.mean(np.abs(_gl - _LF) < 1e-6)), 6),
+        "sub_floor_real": round(float(np.mean(RE < _LF)), 5),
+        "sub_floor_gen": round(float(np.mean(_gl < _LF)), 5),
+        "near_floor_real": round(float(np.mean(RE < _LF + 0.5)), 5),
+        "near_floor_gen": round(float(np.mean(_gl < _LF + 0.5)), 5),
+    }
+    print("floor edge (real vs gen): " + "  ".join(f"{k}={v}" for k, v in floor_edge.items()),
+          flush=True)
 
     # (1) per-observable Wasserstein
     obs = {"cells_per_shower": (r_n, g_n_arr), "cell_logE": (RE, np.log(gen_E + 1e-12)),
@@ -270,6 +370,52 @@ def main():
         obs["shower_depth"] = (r_dsh, g_dsh)
     wass = {k: float(wasserstein_distance(a, b)) for k, (a, b) in obs.items()}
     wnorm = {k: wass[k] / (obs[k][0].std() + 1e-9) for k in obs}
+
+    if args.plots:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        panels = [("cell_logE", "cell log E [GeV]", True), ("d_eta", "cell d_eta", False),
+                  ("d_phi", "cell d_phi", False), ("cell_depth", "cell depth [mm]", False),
+                  ("cells_per_shower", "cells / shower", True), ("logEreco", "shower log E [GeV]", False),
+                  ("shower_width", "shower width", False), ("shower_depth", "shower depth [mm]", False)]
+        panels = [p for p in panels if p[0] in obs]
+        rr = np.sqrt(RP ** 2 + RG ** 2); gg = np.sqrt(g_de ** 2 + g_dp ** 2)
+        extra = ("radial profile", "sqrt(d_eta^2 + d_phi^2)", rr, gg)
+        n = len(panels) + 1
+        ncol = 4 if n > 4 else n
+        nrow = int(np.ceil(n / ncol))
+        fig, axs = plt.subplots(nrow, ncol, figsize=(4.3 * ncol, 3.5 * nrow))
+        axs = np.atleast_1d(axs).ravel()
+        for ax, item in zip(axs, panels + [extra]):
+            if len(item) == 3:
+                key, xlabel, logy = item
+                a, b = obs[key]
+                title = f"{key}   W/sigma {wnorm[key]:.3f}"
+            else:
+                title, xlabel, a, b = item
+                logy = False
+            lo, hi = np.percentile(np.concatenate([a, b]), [0.2, 99.8])
+            if not np.isfinite([lo, hi]).all() or hi <= lo:
+                lo, hi = float(np.min(a)), float(np.max(a)) + 1e-6
+            bins = np.linspace(lo, hi, 60)
+            ax.hist(a, bins=bins, density=True, histtype="step", lw=2.0, color="#1f6feb", label="real")
+            ax.hist(b, bins=bins, density=True, histtype="step", lw=2.0, color="#e8871a", label="generated")
+            if logy:
+                ax.set_yscale("log")
+            ax.set_title(title, fontsize=11)
+            ax.set_xlabel(xlabel, fontsize=10)
+            ax.legend(fontsize=9)
+        for ax in axs[n:]:
+            ax.axis("off")
+        fig.suptitle(f"calo response, real vs generated — {args.tag}   "
+                     f"({len(sel):,} showers, {len(RE):,} real / {len(gen_E):,} generated cells)",
+                     fontsize=13)
+        fig.tight_layout(rect=[0, 0, 1, 0.96])
+        Path(args.outdir).mkdir(parents=True, exist_ok=True)
+        pp = Path(args.outdir) / f"marginals_{args.tag}.png"
+        fig.savefig(pp, dpi=130); plt.close(fig)
+        print("wrote", pp, flush=True)
 
     # (3) conditional energy response: <E_reco/E_true> + resolution vs E_true
     resp_r = r_Ereco / E_true; resp_g = g_Ereco / E_true
@@ -296,9 +442,20 @@ def main():
                          "respmax_real": round(float(resp_r[m].max()), 3), "respmax_gen": round(float(resp_g[m].max()), 3)})
 
     # (2) event gate
-    ev_of = eid_sh; uev = np.unique(ev_of); Xr, Xg = [], []
-    for ev in uev:
-        pm = np.where(ev_of == ev)[0]; n_src = len(pm)
+    # GROUP BY EVENT ONCE. The per-event loop used to call `np.where(ev_of == ev)` and
+    # `np.isin(gen_src, pm)` on every iteration -- O(n_showers x n_events) and O(n_cells x n_events).
+    # On the e+- slice that is ~1e11 element ops; on a multi-species slice it does not finish.
+    # A stable argsort gives contiguous per-event blocks for both sides instead.
+    ev_of = eid_sh
+    sh_ord = np.argsort(ev_of, kind="stable")
+    uev, ev_first, ev_cnt = np.unique(ev_of[sh_ord], return_index=True, return_counts=True)
+    g_ev = ev_of[gen_src]
+    g_ord = np.argsort(g_ev, kind="stable")
+    g_lo = np.searchsorted(g_ev[g_ord], uev, "left")
+    g_hi = np.searchsorted(g_ev[g_ord], uev, "right")
+    Xr, Xg, ev_nsrc = [], [], []
+    for k in range(len(uev)):
+        pm = sh_ord[ev_first[k]:ev_first[k] + ev_cnt[k]]; n_src = len(pm)
         re, rp, rE = [], [], []
         for i in pm:
             a, b = off[sel[i]], off[sel[i] + 1]; re.append(ch[a:b, CH_ETA]); rp.append(ch[a:b, CH_PHI]); rE.append(np.exp(ch[a:b, CH_LOGE]))
@@ -307,10 +464,22 @@ def main():
         rd = np.concatenate([r_depth[off[sel[i]]:off[sel[i] + 1]] for i in pm]) if has_depth else None
         Xr.append(event_features(np.concatenate(re), np.concatenate(rp), np.concatenate(rE), n_src,
                                  widths=r_width[pm], depths=rd))
-        gm = np.isin(gen_src, pm)
+        gm = g_ord[g_lo[k]:g_hi[k]]
         Xg.append(event_features(gen_eta[gm], gen_phi[gm], gen_E[gm], n_src, widths=g_width[pm],
                                  depths=gen_depth[gm] if has_depth else None))
+        ev_nsrc.append(n_src)
     Xr, Xg = np.array(Xr), np.array(Xg)
+    if args.dump_features:
+        # PAIRED by construction: row k of Xr and of Xg are the same event, generated from the same
+        # truth particle list, so n_src is identical on both sides. The gate throws that pairing
+        # away; the diagnostic needs it.
+        dfp = Path(args.dump_features); dfp.parent.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(dfp, Xr=Xr.astype(np.float32), Xg=Xg.astype(np.float32),
+                            event_id=uev.astype(np.int64), n_src=np.asarray(ev_nsrc, np.int32),
+                            feature_names=np.array(FEATURE_NAMES + WIDTH_FEATURE_NAMES
+                                                   + (DEPTH_FEATURE_NAMES if has_depth else [])),
+                            tag=args.tag, pdg_class=np.asarray(args.pdg_class, np.int64))
+        print(f"wrote gate features {dfp}  ({Xr.shape[0]} events x {Xr.shape[1]} features)")
     y = np.concatenate([np.zeros(len(Xr)), np.ones(len(Xg))])
     perm = rng.permutation(len(Xr) + len(Xg)); ntr = (len(Xr) + len(Xg)) // 2
     yt = torch.as_tensor(y, dtype=torch.float32, device=dev)
@@ -329,14 +498,46 @@ def main():
             opt.step()
         with torch.no_grad():
             s = clf(Xt[torch.as_tensor(perm[ntr:], device=dev)]).squeeze(-1).cpu().numpy()
-        return float(rank_auc(s, y[perm[ntr:]]))
+        return float(rank_auc(s, y[perm[ntr:]])), s, y[perm[ntr:]]
 
     n8 = len(FEATURE_NAMES)
-    auc = gate(n8)                                  # the historical 8-feature gate (comparable)
-    auc_w = gate(n8 + len(WIDTH_FEATURE_NAMES))     # + lateral shape (strictly more informative)
+    auc, s8, y8 = gate(n8)                          # the historical 8-feature gate (comparable)
+    auc_w, sw, yw = gate(n8 + len(WIDTH_FEATURE_NAMES))   # + lateral shape (strictly more informative)
     # + LONGITUDINAL. The 8-feature gate is blind to lateral shape; both are blind to depth, which
     # the model only started generating on 2026-08-24. Quote this one for anything 3D.
-    auc_d = gate(n8 + len(WIDTH_FEATURE_NAMES) + len(DEPTH_FEATURE_NAMES)) if has_depth else None
+    if has_depth:
+        auc_d, sd_, yd_ = gate(n8 + len(WIDTH_FEATURE_NAMES) + len(DEPTH_FEATURE_NAMES))
+    else:
+        auc_d = sd_ = yd_ = None
+
+    if args.plots:
+        # ROC of the two-sample gate itself. The DIAGONAL is the target: a generator the classifier
+        # cannot separate from Geant sits on it. Drawn from the same held-out scores the AUC uses.
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        curves = [("8 energy/multiplicity features", s8, y8, auc, "#1f6feb"),
+                  ("+ lateral width", sw, yw, auc_w, "#0e9488")]
+        if has_depth:
+            curves.append(("+ longitudinal depth", sd_, yd_, auc_d, "#c2384a"))
+        figr, axr = plt.subplots(figsize=(6.0, 5.6))
+        for lab, sc, yy, aa, col in curves:
+            o = np.argsort(-sc)
+            yo = yy[o]
+            tp = np.cumsum(yo); fp = np.cumsum(1.0 - yo)
+            tpr = np.concatenate([[0], tp / max(tp[-1], 1)])
+            fpr = np.concatenate([[0], fp / max(fp[-1], 1)])
+            axr.plot(fpr, tpr, lw=2.2, color=col, label=f"{lab}   AUC {aa:.3f}")
+        axr.plot([0, 1], [0, 1], "k--", lw=1.4, label="indistinguishable (AUC 0.5)")
+        axr.set_xlabel("false positive rate (real called generated)")
+        axr.set_ylabel("true positive rate (generated called generated)")
+        axr.set_title(f"two-sample event gate — {args.tag}\ncloser to the diagonal is better")
+        axr.legend(fontsize=9, loc="lower right"); axr.grid(alpha=0.3)
+        figr.tight_layout()
+        Path(args.outdir).mkdir(parents=True, exist_ok=True)
+        rp = Path(args.outdir) / f"roc_{args.tag}.png"
+        figr.savefig(rp, dpi=130); plt.close(figr)
+        print("wrote", rp, flush=True)
 
     # LONGITUDINAL PROFILE — energy fraction by depth bin, real vs gen. `pileup_generator_plan.md:356`
     # names "layer-wise energy fractions, shower width/depth profiles" as acceptance criteria; they
@@ -377,6 +578,13 @@ def main():
            "anchor_cond": bool(model.anchor_cond),
            "anchor_branch_frac": (anchor_branches if anchorT is not None else None),
            "over_etrue_frac_gen": round(n_over / max(len(sel), 1), 6),
+           # CELL-COUNT TRUNCATION. Non-zero means the cap bound real showers, and because
+           # `partition` rescales the survivors to the sampled total those showers keep their
+           # energy in too few, too-hot cells -- so this contaminates every per-cell energy
+           # feature, not just n_cells. Real reference (multispecies_v2_h5): 2.10% of showers.
+           "max_cells": int(args.max_cells),
+           "cell_projection": snap_report,
+           "n_trunc_frac_gen": round(n_trunc / max(len(sel), 1), 6),
            "over_etrue_frac_real": round(float((r_Ereco > E_true).mean()), 6),
            "event_gate_auc": round(float(auc), 4),           # 8 energy/multiplicity features (historical)
            "event_gate_auc_width": round(float(auc_w), 4),   # + per-shower width mean/std
@@ -384,6 +592,7 @@ def main():
            "longitudinal_profile": prof,   # {depth bin: [real, gen]} energy fractions
            "gate_auc_per_feature": per_feat,
            "wasserstein_over_std": {k: round(v, 4) for k, v in wnorm.items()},
+           "floor_edge": floor_edge,
            "energy_response": response, "speed": speed}
     outdir = Path(args.outdir); outdir.mkdir(parents=True, exist_ok=True)
     (outdir / f"metrics_{args.tag}.json").write_text(json.dumps(out, indent=2))
