@@ -247,7 +247,7 @@ def main():
               f"{'; GlobalHead conditioned on the anchor' if model.anchor_cond else ''}")
     # generate (batched) + time it
     gen_eta, gen_phi, gen_E, gen_src, gen_depth = [], [], [], [], []
-    n_sat = 0; n_over = 0; n_trunc = 0
+    n_sat = 0; n_over = 0; n_trunc = 0; n_zs = 0
     E_trueT = torch.as_tensor(E_true, dtype=torch.float32, device=dev)
     torch.cuda.synchronize() if dev == "cuda" else None
     t0 = time.time()
@@ -271,7 +271,7 @@ def main():
         if pos.shape[1] >= 3:
             gen_depth.append(pos[:, 2])
         n_sat += int(sh["scale_saturated"].sum()); n_over += int(sh["over_etrue"].sum())
-        n_trunc += int(sh["n_trunc"])
+        n_trunc += int(sh["n_trunc"]); n_zs += int(sh.get("n_zero_suppressed", 0))
     torch.cuda.synchronize() if dev == "cuda" else None
     gen_time = time.time() - t0
     print(f"cell-count cap: max_cells={args.max_cells}  truncated {n_trunc:,} / {len(sel):,} showers "
@@ -585,6 +585,9 @@ def main():
            "max_cells": int(args.max_cells),
            "cell_projection": snap_report,
            "n_trunc_frac_gen": round(n_trunc / max(len(sel), 1), 6),
+           # joint-energy models drop sub-threshold cells (zero-suppression); report the count so a
+           # generator that "matches" by discarding half its cells cannot pass unnoticed
+           "n_zero_suppressed_gen": int(n_zs),
            "over_etrue_frac_real": round(float((r_Ereco > E_true).mean()), 6),
            "event_gate_auc": round(float(auc), 4),           # 8 energy/multiplicity features (historical)
            "event_gate_auc_width": round(float(auc_w), 4),   # + per-shower width mean/std

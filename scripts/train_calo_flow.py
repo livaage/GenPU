@@ -88,6 +88,23 @@ def main():
                     help="dequantize the discrete count: log_n <- log(n + U(-0.5,0.5)) so the "
                          "continuous mixture can fit the n=1 atom (recovered by round at gen)")
     ap.add_argument("--no_wandb", action="store_true")
+    ap.add_argument("--joint_energy", action="store_true",
+                    help="A-prime (2026-09-16): the point flow emits log-E as a 4th coordinate, so "
+                         "position and energy are generated jointly and EnergyHead is not trained. "
+                         "Sub-threshold cells are DROPPED at generation (zero-suppression), never "
+                         "clamped -- clamping is what made the original energy-in-flow model pile "
+                         "cells at 50 keV.")
+    ap.add_argument("--point_attn", type=int, default=0,
+                    help="set-attention layers in the point flow: cells of a shower attend to each "
+                         "other. 0 = the historical per-cell MLP (cells i.i.d. given conditioning).")
+    ap.add_argument("--attn_dim", type=int, default=128)
+    ap.add_argument("--attn_heads", type=int, default=4)
+    ap.add_argument("--attn_self_only", action="store_true",
+                    help="CONTROL: identical set-attention network, attention masked to the "
+                         "diagonal so each cell sees only itself. Isolates 'cells see each other' "
+                         "from the architecture/capacity change.")
+    ap.add_argument("--set_budget", type=int, default=24576,
+                    help="padded tokens per shower block (training batches and sampling)")
     ap.add_argument("--seed", type=int, default=0,
                     help="torch seed (init + batch sampling). Every logged run before 2026-08-16 used "
                          "0, so keep it there for like-for-like comparisons; change it only to get a "
@@ -245,6 +262,20 @@ def main():
         anc_np = d["anchor"]
         a3 = np.concatenate([anc_np, np.hypot(anc_np[:, 0], anc_np[:, 1])[:, None]], 1)
         anchor_kwargs = dict(anchor_cond=True, anchor_mean=a3.mean(0), anchor_std=a3.std(0) + 1e-6)
+    je_mean = je_std = None
+    if args.joint_energy:
+        _le = pts[:, -1][tr_pt]                     # LAST column = energy, train split only
+        je_mean, je_std = float(_le.mean()), float(_le.std() + 1e-6)
+        print(f"--joint_energy ON: log-E standardised with mean {je_mean:.3f} std {je_std:.3f}; "
+              f"EnergyHead NOT trained")
+    if args.point_attn:
+        print(f"--point_attn {args.point_attn} (dim {args.attn_dim}, heads {args.attn_heads}, "
+              f"budget {args.set_budget}){'  ** SELF-ONLY CONTROL **' if args.attn_self_only else ''}")
+    set_kwargs = dict(joint_energy=args.joint_energy, point_attn=args.point_attn,
+                      attn_dim=args.attn_dim, attn_heads=args.attn_heads,
+                      attn_self_only=args.attn_self_only, set_budget=args.set_budget)
+    if je_mean is not None:
+        set_kwargs.update(joint_e_mean=je_mean, joint_e_std=je_std)
     model = CaloFlow(norm, log_floor=log_floor, energy_use_glob=not args.no_energy_glob,
                      logE_max=logE_max, logE_max_pdg=logE_max_pdg, n_max_pdg=n_max_pdg,
                      width_norm=width_norm,
@@ -256,7 +287,7 @@ def main():
                      energy_n_regions=(N_CALO_REGIONS if region_np is not None else 0),
                      pos_feat_mean=(_m if pos_feat_np is not None else None),
                      pos_feat_std=(_s if pos_feat_np is not None else None),
-                     **anchor_kwargs, **qt_kwargs, **ctx_kwargs).to(dev)
+                     **anchor_kwargs, **qt_kwargs, **ctx_kwargs, **set_kwargs).to(dev)
     if core_anchored != "none":
         anc = d["anchor"]; amode = d["anchor_mode"]
         print(f"core anchor: {core_anchored} (glob dims 2,3 are the residual); branches "
@@ -299,6 +330,50 @@ def main():
     va_pt_idx = torch.as_tensor(np.where(~tr_pt)[0], device=dev)
     va_sh_idx = torch.as_tensor(np.where(val_sh)[0], device=dev)
 
+    # flow target: standardised positions, plus standardised log-E under --joint_energy
+    flowX = posS if not args.joint_energy else torch.cat(
+        [posS, ((logE - je_mean) / je_std)[:, None]], dim=1)
+
+    # SHOWER-LEVEL BATCHES for the set model. The historical loop draws random POINTS from the whole
+    # dataset, so two cells of one shower essentially never share a batch -- a set model would never
+    # see a shower. Batches are drawn from size classes (powers of two) so padding waste stays < 2x,
+    # and a class is chosen with probability proportional to its CELL count, which keeps each cell's
+    # chance of being trained on the same as under the per-point sampler.
+    off_t = torch.as_tensor(off[:-1], device=dev)
+    npt_t = torch.as_tensor(npt, device=dev)
+
+    def make_sampler(sh_ids):
+        sz = npt[sh_ids]
+        cls = np.floor(np.log2(np.maximum(sz, 1))).astype(int)
+        groups = []
+        for c_ in np.unique(cls):
+            ids = sh_ids[cls == c_]
+            groups.append((torch.as_tensor(ids, device=dev), int(npt[ids].max()), float(npt[ids].sum())))
+        w = np.array([g[2] for g in groups]); w = w / w.sum()
+
+        def draw():
+            ids, nmax, _ = groups[int(rng.choice(len(groups), p=w))]
+            B = max(1, args.set_budget // nmax)
+            sh = ids[torch.randint(len(ids), (B,), device=dev)]
+            n_b = npt_t[sh]
+            rows = torch.repeat_interleave(torch.arange(B, device=dev), n_b)
+            cols = torch.arange(rows.numel(), device=dev) - torch.repeat_interleave(torch.cumsum(n_b, 0) - n_b, n_b)
+            return off_t[sh][rows] + cols, rows          # flat point indices, local shower index
+        return draw
+
+    draw_tr = make_sampler(np.where(tr_sh)[0]) if args.point_attn else None
+    draw_va = make_sampler(np.where(val_sh)[0]) if args.point_attn else None
+
+    def flow_loss(val=False):
+        if args.point_attn:
+            pidx, lsrc = (draw_va if val else draw_tr)()
+            return model.points.cfm_loss(flowX[pidx], model.cond_embed(pt_contS[pidx], pt_pdg[pidx], "points"),
+                                         pt_globS[pidx][:, :2], src=lsrc)
+        idx = (va_pt_idx if val else tr_pt_idx)
+        pi_ = idx[torch.randint(len(idx), (args.pt_batch,), device=dev)]
+        return model.points.cfm_loss(flowX[pi_], model.cond_embed(pt_contS[pi_], pt_pdg[pi_], "points"),
+                                     pt_globS[pi_][:, :2])
+
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
     Path(args.out).mkdir(parents=True, exist_ok=True)
 
@@ -317,9 +392,8 @@ def main():
         model.eval()
         with torch.no_grad():
             pi = va_pt_idx[torch.randint(len(va_pt_idx), (args.pt_batch,), device=dev)]
-            cfm = model.points.cfm_loss(posS[pi], model.cond_embed(pt_contS[pi], pt_pdg[pi], "points"),
-                                        pt_globS[pi][:, :2]).item()
-            eh = model.energy.loss(model.cond_embed(pt_contS[pi], pt_pdg[pi], "energy"),
+            cfm = flow_loss(val=True).item()
+            eh = 0.0 if args.joint_energy else model.energy.loss(model.cond_embed(pt_contS[pi], pt_pdg[pi], "energy"),
                                    logE[pi], model.log_floor, glob_std=pt_globS[pi],
                                    n_cells=pt_nT[pi],
                                    pos_feat=None if pos_featT is None else pos_featT[pi],
@@ -334,9 +408,8 @@ def main():
     for step in range(1, args.steps + 1):
         pi = tr_pt_idx[torch.randint(len(tr_pt_idx), (args.pt_batch,), device=dev)]
         si = tr_sh_idx[torch.randint(len(tr_sh_idx), (args.glob_batch,), device=dev)]
-        cfm = model.points.cfm_loss(posS[pi], model.cond_embed(pt_contS[pi], pt_pdg[pi], "points"),
-                                    pt_globS[pi][:, :2])
-        ehl = model.energy.loss(model.cond_embed(pt_contS[pi], pt_pdg[pi], "energy"),
+        cfm = flow_loss()
+        ehl = torch.zeros((), device=dev) if args.joint_energy else model.energy.loss(model.cond_embed(pt_contS[pi], pt_pdg[pi], "energy"),
                                 logE[pi], model.log_floor, glob_std=pt_globS[pi], n_cells=pt_nT[pi],
                                 pos_feat=None if pos_featT is None else pos_featT[pi],
                                 region=None if regionT is None else regionT[pi])

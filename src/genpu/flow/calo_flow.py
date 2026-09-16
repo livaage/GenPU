@@ -11,8 +11,12 @@ embedding — kinematics + vertex + charge + PDG):
                 approach, which over-piled the 50 keV floor (event gate: that pile
                 was the dominant real-vs-gen discriminator, AUC 0.99).
 
-Points within a shower are i.i.d. given (cond, global); positions localise via the
-shower-centred frame. Energy correlates with position through EnergyHead's pos input.
+Points within a shower are i.i.d. given (cond, global) UNLESS the model is built with
+`point_attn > 0` (2026-09-16), in which case cells of a shower attend to each other. With
+`joint_energy=True` the flow also emits each cell's log-E as a 4th coordinate and EnergyHead is not
+used: position and energy come out of ONE joint set model (option A-prime). Sub-threshold cells are
+then DROPPED, emulating zero-suppression, never clamped to the floor -- clamping is exactly what
+made the original energy-in-the-flow model pile cells at 50 keV.
 """
 from __future__ import annotations
 import torch
@@ -88,34 +92,159 @@ def timestep_embed(t, dim=64):
     return torch.cat([ang.sin(), ang.cos()], dim=-1)
 
 
-class PointCFM(nn.Module):
-    """Conditional flow-matching velocity field over 2-D standardised positions."""
+class SetBatcher:
+    """Groups a flat, `src`-indexed point set into padded (B, N) blocks of similar-size showers.
 
-    def __init__(self, pt_dim=2, embed_dim=64, glob_dim=2, hidden=256, t_dim=64, cond_hidden=64):
+    Showers are sorted by size and packed greedily so that B * N <= `budget` padded tokens per block.
+    Built ONCE per sampled batch and reused for every ODE step. The largest real shower is 1,685
+    cells, so a single padded (S, N_max) tensor would be S x 1685 x d -- ~9 GB for a 20k-shower
+    sampling batch -- which is why size-bucketing is not optional.
+    """
+
+    def __init__(self, src, budget=32768):
+        import numpy as np
+        src = src.long()
+        dev = src.device
+        self.P = src.numel()
+        S = int(src.max()) + 1 if self.P else 0
+        order = torch.argsort(src, stable=True)
+        counts = torch.bincount(src, minlength=S)
+        starts = torch.cumsum(counts, 0) - counts
+        sizes = counts.cpu().numpy()
+        sh = np.argsort(sizes, kind="stable")
+        sh = sh[sizes[sh] > 0]
+        ssz = sizes[sh]
+        self.blocks = []
+        i = 0
+        while i < len(sh):
+            j = i + max(1, budget // max(int(ssz[i]), 1))
+            j = min(j, len(sh))
+            while j - i > 1 and (j - i) * int(ssz[j - 1]) > budget:
+                j = i + max(1, budget // int(ssz[j - 1]))
+            ids = torch.as_tensor(sh[i:j], device=dev)
+            n_b = counts[ids]
+            B, N = len(ids), int(n_b.max())
+            rows = torch.repeat_interleave(torch.arange(B, device=dev), n_b)
+            cols = torch.arange(rows.numel(), device=dev) - torch.repeat_interleave(torch.cumsum(n_b, 0) - n_b, n_b)
+            flat = order[starts[ids][rows] + cols]
+            valid = torch.zeros(B, N, dtype=torch.bool, device=dev)
+            valid[rows, cols] = True
+            self.blocks.append((flat, rows, cols, B, N, valid))
+            i = j
+
+    def run(self, h, fn):
+        """Apply fn((B, N, d) padded, (B, N) valid) -> (B, N, d_out) blockwise; return (P, d_out)."""
+        outs, idxs = [], []
+        for flat, rows, cols, B, N, valid in self.blocks:
+            H = h.new_zeros(B, N, h.shape[1]).index_put((rows, cols), h[flat])
+            outs.append(fn(H, valid)[rows, cols])
+            idxs.append(flat)
+        idx = torch.cat(idxs)
+        inv = torch.empty_like(idx)
+        inv[idx] = torch.arange(idx.numel(), device=idx.device)
+        return torch.cat(outs)[inv]
+
+
+class SetAttnBlock(nn.Module):
+    """Pre-norm self-attention + MLP over the cells of ONE shower (padding masked out)."""
+
+    def __init__(self, d, heads=4):
+        super().__init__()
+        assert d % heads == 0
+        self.heads = heads
+        self.n1 = nn.LayerNorm(d); self.qkv = nn.Linear(d, 3 * d); self.o = nn.Linear(d, d)
+        self.n2 = nn.LayerNorm(d); self.ff = mlp([d, 2 * d, d])
+
+    def forward(self, h, mask):
+        B, N, d = h.shape
+        q, k, v = self.qkv(self.n1(h)).view(B, N, 3, self.heads, d // self.heads).unbind(2)
+        a = F.scaled_dot_product_attention(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2),
+                                           attn_mask=mask)
+        h = h + self.o(a.transpose(1, 2).reshape(B, N, d))
+        return h + self.ff(self.n2(h))
+
+
+class PointCFM(nn.Module):
+    """Conditional flow-matching velocity field over a shower's cells.
+
+    `attn_layers = 0` (every checkpoint before 2026-09-16): a per-cell MLP, so the cells of a shower
+    are i.i.d. given the conditioning. Measured consequences on multispecies_v2 (200k showers):
+    after projection onto real ODD cells 0.0357 of generated points share a channel against a real
+    floor of 0.0003, concentrated in the core, while within-shower NN spacing is 2.14x real -- a
+    sampler that places cells without regard for each other, not a density excess.
+
+    `attn_layers > 0`: cells of the SAME shower attend to each other (option A-prime, 2026-09-16).
+    The flow time `t` is then shared by the whole shower, since at sampling time every cell of a
+    shower is integrated together. `self_only` keeps the identical architecture but masks attention
+    to the diagonal, so each cell sees only itself: the capacity- and architecture-matched CONTROL
+    that isolates "cells see each other" from everything else the new network changes.
+    """
+
+    def __init__(self, pt_dim=2, embed_dim=64, glob_dim=2, hidden=256, t_dim=64, cond_hidden=64,
+                 attn_layers=0, attn_dim=128, attn_heads=4, self_only=False, set_budget=32768):
         super().__init__()
         self.pt_dim = pt_dim
         self.cond_enc = mlp([embed_dim + glob_dim, cond_hidden, cond_hidden])
         self.t_dim = t_dim
-        self.net = mlp([pt_dim + t_dim + cond_hidden, hidden, hidden, hidden, pt_dim])
+        self.attn_layers = int(attn_layers)
+        self.set_budget = int(set_budget)
+        in_dim = pt_dim + t_dim + cond_hidden
+        if self.attn_layers:
+            self.inp = mlp([in_dim, attn_dim, attn_dim])
+            self.blocks = nn.ModuleList([SetAttnBlock(attn_dim, attn_heads) for _ in range(self.attn_layers)])
+            self.onorm = nn.LayerNorm(attn_dim)
+            self.outp = nn.Linear(attn_dim, pt_dim)
+            self.register_buffer("attn_heads_buf", torch.tensor(int(attn_heads)))
+            self.register_buffer("self_only_buf", torch.tensor(1.0 if self_only else 0.0))
+        else:
+            self.net = mlp([in_dim, hidden, hidden, hidden, pt_dim])
 
-    def velocity(self, x, t, c):
-        return self.net(torch.cat([x, timestep_embed(t, self.t_dim), c], dim=-1))
+    def _set_fn(self):
+        self_only = bool(self.self_only_buf > 0)
 
-    def cfm_loss(self, x1, cond_embed, glob_std):
+        def fn(H, valid):
+            N = H.shape[1]
+            if self_only:
+                eye = torch.eye(N, dtype=torch.bool, device=H.device)
+                mask = (eye[None] & valid[:, None, :])[:, None]
+            else:
+                mask = valid[:, None, None, :]
+            for b in self.blocks:
+                H = b(H, mask)
+            return self.outp(self.onorm(H))
+        return fn
+
+    def velocity(self, x, t, c, batcher=None):
+        feat = torch.cat([x, timestep_embed(t, self.t_dim), c], dim=-1)
+        if not self.attn_layers:
+            return self.net(feat)
+        if batcher is None:
+            raise ValueError("set-attention PointCFM needs the shower index (src) of every cell")
+        return batcher.run(self.inp(feat), self._set_fn())
+
+    def cfm_loss(self, x1, cond_embed, glob_std, src=None):
         c = self.cond_enc(torch.cat([cond_embed, glob_std], dim=-1))
         x0 = torch.randn_like(x1)
-        t = torch.rand(x1.shape[0], 1, device=x1.device)
+        if self.attn_layers:
+            # ONE t per shower: at sampling time the whole shower is integrated together
+            S = int(src.max()) + 1
+            t = torch.rand(S, 1, device=x1.device)[src]
+            batcher = SetBatcher(src, self.set_budget)
+        else:
+            t = torch.rand(x1.shape[0], 1, device=x1.device)
+            batcher = None
         xt = (1 - t) * x0 + t * x1
-        return F.mse_loss(self.velocity(xt, t, c), x1 - x0)
+        return F.mse_loss(self.velocity(xt, t, c, batcher), x1 - x0)
 
     @torch.no_grad()
-    def sample(self, cond_embed, glob_std, steps=50):
+    def sample(self, cond_embed, glob_std, steps=50, src=None):
         c = self.cond_enc(torch.cat([cond_embed, glob_std], dim=-1))
         x = torch.randn(cond_embed.shape[0], self.pt_dim, device=cond_embed.device)
+        batcher = SetBatcher(src, self.set_budget) if self.attn_layers else None
         dt = 1.0 / steps
         for k in range(steps):
             t = torch.full((x.shape[0], 1), k * dt, device=x.device)
-            x = x + self.velocity(x, t, c) * dt
+            x = x + self.velocity(x, t, c, batcher) * dt
         return x
 
 
@@ -344,7 +473,9 @@ class CaloFlow(nn.Module):
                  separate_trunks=False, core_anchored=False, anchor_cond=False,
                  anchor_mean=None, anchor_std=None, energy_glob_idx=None, floor_n_buckets=0,
                  energy_pos_dim=0, energy_n_regions=0, pos_feat_mean=None, pos_feat_std=None,
-                 floor_atom=True, n_max_pdg=None):
+                 floor_atom=True, n_max_pdg=None, joint_energy=False, point_attn=0,
+                 attn_dim=128, attn_heads=4, attn_self_only=False, set_budget=32768,
+                 joint_e_mean=0.0, joint_e_std=1.0, zero_suppress=True):
         super().__init__()
         # CONDITIONING TRUNK(S). Shared (the original) means one ParticleConditioning MLP feeds all
         # three heads and the summed loss back-propagates every head's gradient into it — so changing
@@ -373,7 +504,18 @@ class CaloFlow(nn.Module):
         # calo model was 2D for that reason (see PIPELINE.md §5). v2 slices are (P,4) with the
         # longitudinal coordinate, -> pos_dim 3. Default 2 keeps every existing checkpoint loadable.
         self.pos_dim = int(pos_dim)
-        self.points = PointCFM(pt_dim=self.pos_dim, embed_dim=embed_dim, hidden=hidden_pt)
+        # JOINT ENERGY (A-prime, 2026-09-16): the flow emits log-E as one more coordinate, so position
+        # and energy are generated TOGETHER and, with point_attn, jointly across the shower's cells.
+        self.joint_energy = bool(joint_energy)
+        self.register_buffer("joint_energy_on", torch.tensor(1.0 if joint_energy else 0.0))
+        self.register_buffer("joint_e_mean", torch.tensor(float(joint_e_mean)))
+        self.register_buffer("joint_e_std", torch.tensor(float(joint_e_std)))
+        # zero-suppression at generation: drop cells whose final energy is below the readout
+        # threshold, as the detector does. NEVER clamp them to the floor (see module docstring).
+        self.register_buffer("zero_suppress_on", torch.tensor(1.0 if zero_suppress else 0.0))
+        self.points = PointCFM(pt_dim=self.pos_dim + int(self.joint_energy), embed_dim=embed_dim,
+                               hidden=hidden_pt, attn_layers=point_attn, attn_dim=attn_dim,
+                               attn_heads=attn_heads, self_only=attn_self_only, set_budget=set_budget)
         # energy sees (total_logE, log_n) — the shower energy scale particle features can't predict
         # energy_glob_idx overrides energy_use_glob: e.g. [1] = log_n only (multiplicity, no scale)
         self.energy = EnergyHead(embed_dim=embed_dim, n_mix=4,   # extra component for the sub-floor tail
@@ -500,9 +642,23 @@ class CaloFlow(nn.Module):
         # POSITION DIMENSIONALITY, inferred like everything else here: PointCFM's final Linear
         # outputs pt_dim, so its weight's first axis IS the position dimension. Absent on no
         # checkpoint (the layer always exists), but guard anyway -> 2, the pre-2026-08-24 default.
-        _pn = [k for k in sd if k.startswith("points.net.") and k.endswith(".weight")]
-        opts = dict(opts, pos_dim=int(sd[sorted(_pn, key=lambda k: int(k.split(".")[2]))[-1]].shape[0])
-                    if _pn else 2)
+        _joint = bool(float(sd.get("joint_energy_on", 0.0)))
+        if "points.outp.weight" in sd:
+            # set-attention PointCFM (2026-09-16): output width = pos_dim + joint-energy column
+            _blocks = {k.split(".")[2] for k in sd if k.startswith("points.blocks.")}
+            opts = dict(opts, pos_dim=int(sd["points.outp.weight"].shape[0]) - int(_joint),
+                        point_attn=len(_blocks),
+                        attn_dim=int(sd["points.outp.weight"].shape[1]),
+                        attn_heads=int(sd["points.attn_heads_buf"]),
+                        attn_self_only=bool(float(sd["points.self_only_buf"]) > 0))
+        else:
+            _pn = [k for k in sd if k.startswith("points.net.") and k.endswith(".weight")]
+            opts = dict(opts, pos_dim=int(sd[sorted(_pn, key=lambda k: int(k.split(".")[2]))[-1]].shape[0])
+                        - int(_joint) if _pn else 2)
+        opts.update(joint_energy=_joint,
+                    joint_e_mean=float(sd.get("joint_e_mean", 0.0)),
+                    joint_e_std=float(sd.get("joint_e_std", 1.0)),
+                    zero_suppress=bool(float(sd.get("zero_suppress_on", 1.0))))
         opts.update(width_norm=bool(float(sd.get("width_norm", 0.0))) or len(norm["glob_mean"]) >= 5,
                     separate_trunks=any(k.startswith("cond_glob.") for k in sd),
                     core_anchored=bool(float(sd.get("core_anchored", 0.0))),
@@ -687,7 +843,10 @@ class CaloFlow(nn.Module):
         # per-shower embeddings, then index by cell — cheaper than embedding every cell
         ce_p = self.cond_embed(cont_std, pdg, "points")
         ce_e = self.cond_embed(cont_std, pdg, "energy")
-        pos = self.unstd_pos(self.points.sample(ce_p[src], g_std[src][:, :2], steps=steps))
+        flow_out = self.points.sample(ce_p[src], g_std[src][:, :2], steps=steps, src=src)
+        pos = self.unstd_pos(flow_out[:, :self.pos_dim])
+        logE_joint = (flow_out[:, self.pos_dim] * self.joint_e_std + self.joint_e_mean
+                      if self.joint_energy else None)
         if bool(self.width_norm > 0):
             # the flow emits SHAPE in units of the shower's width; scale by the sampled width so
             # the per-shower width distribution comes from the global mixture (which can fit its
@@ -721,7 +880,7 @@ class CaloFlow(nn.Module):
         # Validated on 41.65M real cells: region agreement 0.9951, SECTION agreement 1.00000,
         # depth_local RMS error 1.2 mm (job 13033802 + the fit recorded at ETA_BARREL_CUT).
         pos_feat = region = None
-        if self.energy.pos_dim or self.energy.n_regions:
+        if (self.energy.pos_dim or self.energy.n_regions) and not self.joint_energy:
             if pos.shape[1] < 3:
                 raise ValueError("position-conditioned energy head needs a 3-D model (pos_dim>=3): "
                                  "the depth column is what carries the ECAL/HCAL section")
@@ -735,8 +894,12 @@ class CaloFlow(nn.Module):
             w = (r2 / n.to(pos.dtype)).sqrt().clamp(min=1e-6)
             pos_feat = build_pos_feat(dloc, pos[:, :2].norm(dim=-1) / w[src],
                                       self.pos_feat_mean, self.pos_feat_std)
-        logE = self.energy.sample(ce_e[src], self.log_floor, glob_std=g_std[src], logE_max=lmax,
-                                  n_cells=n[src], pos_feat=pos_feat, region=region)
+        if self.joint_energy:
+            # upper bound as before; NO lower clamp -- sub-threshold cells are dropped at the end
+            logE = torch.minimum(logE_joint, lmax)
+        else:
+            logE = self.energy.sample(ce_e[src], self.log_floor, glob_std=g_std[src], logE_max=lmax,
+                                      n_cells=n[src], pos_feat=pos_feat, region=region)
         total = torch.exp(g[:, 0])
 
         if partition:
@@ -777,5 +940,17 @@ class CaloFlow(nn.Module):
             total = torch.minimum(total, e_true)
         else:
             over = torch.zeros(S, dtype=torch.bool, device=g.device)
+        # ZERO-SUPPRESSION (joint-energy models only). Real cells never sit below the 50 keV readout
+        # threshold -- it is a hard cut on the cell total, measured 0.000000 below on 13M e± cells --
+        # so a cell the flow places under it is one the detector would not read out. Drop it. The
+        # EnergyHead path is left untouched so every earlier checkpoint behaves exactly as before.
+        n_zs = 0
+        if self.joint_energy and bool(self.zero_suppress_on > 0):
+            keep = logE >= self.log_floor
+            n_zs = int((~keep).sum())
+            if n_zs:
+                src, pos, logE = src[keep], pos[keep], logE[keep]
+                n = torch.bincount(src, minlength=S)
         return {"n": n, "src": src, "core": core, "pos": pos, "logE": logE, "total": total,
-                "scale_saturated": out_sat, "over_etrue": over, "n_trunc": n_trunc}
+                "scale_saturated": out_sat, "over_etrue": over, "n_trunc": n_trunc,
+                "n_zero_suppressed": n_zs}

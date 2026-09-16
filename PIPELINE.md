@@ -235,6 +235,18 @@ all measured on `multispecies_v2_s0` over 200k showers:
 - they are NOT a density excess: within-shower NN spacing is **2.14x real** (0.00674 vs 0.00314,
   2-D statistic, see caveat in the 2026-09-16 entry). Tuning core density does not address it.
 
+**Set attention and joint energy (A-prime, 2026-09-16) — opt-in, no trained model yet.**
+`train_calo_flow.py --point_attn L` makes cells of a shower attend to each other
+(`SetAttnBlock`, size-bucketed by `SetBatcher`); the flow time `t` is shared per shower, and training
+switches from random POINTS to whole-SHOWER batches (size classes, drawn in proportion to cell count).
+`--attn_self_only` is the matched control: same network, attention masked to the diagonal.
+`--joint_energy` appends standardised log-E as a flow coordinate and stops training `EnergyHead`;
+at generation `logE` comes from the flow, is bounded above by `logE_max_pdg` as before, and cells
+below the 50 keV threshold are **DROPPED** (`n_zero_suppressed` in the output), never clamped —
+clamping to the floor is what sank the original energy-in-flow model. With `--joint_energy`,
+`--energy_pos` and the EnergyHead region/position inputs are unused. `from_checkpoint` infers all of
+this from the state dict; every earlier checkpoint loads unchanged (verified on `electron_v2_s0`).
+
 **Cell count per shower is BOUNDED per species** (2026-09-15). `sample_showers` uses
 `min(max_cells, n_max_pdg[pdg])`; `n_max_pdg` is the largest shower each class produced in training,
 written by `train_calo_flow.py` (same contract as `logE_max_pdg`). Checkpoints older than 2026-09-15
