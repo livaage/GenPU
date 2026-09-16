@@ -226,6 +226,23 @@ calls `_qt_fwd` over `x.shape[1]` = 3 columns (`calo_flow.py:531`), so it raises
 depth column. Loud, not silent — but it means the transform the trainer's own help text calls
 "recommended" is available only to the 2-D v1 models.
 
+**Calo cells within a shower are drawn i.i.d. given the conditioning** (`PointCFM.sample`,
+`calo_flow.py:114`: one `randn` per cell, a velocity field that sees only that cell). Consequences,
+all measured on `multispecies_v2_s0` over 200k showers:
+- after projection onto real cells, **0.0357 of generated points collide** (two in one channel)
+  against a real floor of **0.0003** — real showers are sets of DISTINCT cells and cannot collide;
+- the collisions are core-localised (0.118 within r/width < 0.25, 0.000 beyond 5 widths);
+- they are NOT a density excess: within-shower NN spacing is **2.14x real** (0.00674 vs 0.00314,
+  2-D statistic, see caveat in the 2026-09-16 entry). Tuning core density does not address it.
+
+**Cell count per shower is BOUNDED per species** (2026-09-15). `sample_showers` uses
+`min(max_cells, n_max_pdg[pdg])`; `n_max_pdg` is the largest shower each class produced in training,
+written by `train_calo_flow.py` (same contract as `logE_max_pdg`). Checkpoints older than 2026-09-15
+lack the buffer (-> inf), so for them `max_cells` alone governs, and **its default is still 128**.
+At 128 the sampler destroys 6.87% of all cells on the multispecies slice, hadron-selectively (pbar
+21.3%, mu±/pi0 0%), and `partition=True` repacks their energy into the survivors. Pass
+`--max_cells 4096` when evaluating any pre-2026-09-15 checkpoint. `sample_showers` returns `n_trunc`.
+
 **Calo dimensionality is set by the SLICE** (2026-08-24). `CaloFlow(pos_dim=...)` — 2 for a v1
 (P,3) slice, 3 for a v2 (P,4) slice — and `from_checkpoint` infers it from `PointCFM`'s output
 layer, so old checkpoints stay loadable. Before this the model was 2D unconditionally, which is why
@@ -269,6 +286,28 @@ each slightly off aggregate to roughly `Phi(sqrt(sum_i d_i^2)/sqrt(2))` with no 
 and the script prints that prediction next to the measurement. Measured on e± v2: full 0.825/0.833,
 marginals 0.601/0.617 (aggregation predicts 0.627), joint 0.700/0.724.
 
+**`d_phi` is WRAPPED on the generated side (fixed 2026-09-15).** `g_dp` was `gen_phi - p_phi`
+unwrapped while the real side has always been wrapped (`build_calo_slice_v2.py:292`). Not a no-op:
+the helix anchor moves pion CORES by ~1.5 rad, so core+pos can exceed pi. **Every width/d_phi number
+before 2026-09-15 is affected** — `width_std` AUC 0.5016 was really 0.6953 (never at chance),
+`width_mean` 0.5618 -> 0.5100, `shower_width` W/sigma 0.0344 -> 0.0505.
+
+**`--max_cells` (2026-09-15)** sets the sampler's cell-count cap (default 128, see §5) and the JSON
+reports `n_trunc_frac_gen`. Real rate above 128 on the multispecies slice is 2.10% of showers.
+
+**`--snap_cells` (2026-09-15)** projects generated points onto real ODD cells and MERGES points that
+land in the same cell within a shower (`calo_cells.snap_and_merge`), as a separate deterministic step
+after the continuous sample. Under the flag: depth observables are DROPPED (a snapped depth is a layer
+index, not the continuous coordinate the real side carries), so `event_gate_auc_depth` is null and the
+decomposition's `full` has 10 features instead of 12 — **compare `event_gate_auc`, not `full`,
+across the flag.** The JSON carries `cell_projection` (merged fraction, energy ratio, co-occupancy).
+First result: `event_gate_auc` 0.9357 -> 0.9458, cost entirely in energy features.
+
+**The composite gate saturates.** Fixing the 128 cap moved five marginals toward chance and both the
+marginal (0.842 -> 0.743) and copula (0.845 -> 0.776) halves, while `event_gate_auc` stayed flat
+(0.933 -> 0.936). Near 0.95 the classifier has redundant paths; report the decomposition, not only the
+composite, when judging a change.
+
 **Depth observables (2026-08-24)**, present only when both sides have depth (guarded, with a warning
 otherwise): `event_gate_auc_depth` (+ energy-weighted `depth_mean`/`depth_std`), `cell_depth` and
 `shower_depth` Wassersteins, and a **longitudinal profile** — the acceptance metric
@@ -278,10 +317,16 @@ otherwise): `event_gate_auc_depth` (+ energy-weighted `depth_mean`/`depth_std`),
 
 ## 7. KNOWN GAPS — specified but NOT built
 
-1. **Calo depth / projection-to-cells.** Plan (`pileup_generator_plan.md:257`) specifies
-   "Continuous (x, y, z, E) output; separate deterministic projection onto cells". Neither exists.
-   Consequence: the plan's own acceptance metrics — layer-wise energy fractions, shower depth
-   profiles (line 356) — **have never been computable**, and every calo result is a 2D projection.
+1. ~~**Calo depth / projection-to-cells.**~~ **BUILT.** Depth since 2026-08-24 (v2 slice, 3-D model).
+   Projection since 2026-09-15: `src/genpu/calo_cells.py` (`etaphidepth_to_xyz`, `snap_cells`,
+   `cell_ids`, `snap_and_merge`), constants from the ODD XML
+   (`github.com/OpenDataDetector/OpenDataDetector`: 16-fold, phase 11.25 deg, cells 5.1/30 mm,
+   48/36 layers at 5.050/51.0 mm, sensitive inset 2.40/47.5 mm). Real cells snap to themselves
+   0.99698 within 10 um; round trip from (eta, phi, depth) recovers the same cell id 0.9925 (the
+   residual is mostly the |eta| < 1.60 barrel/endcap guess, 0.9950 correct). Wired in as
+   `calo_metrics.py --snap_cells`. **Still missing:** boundary assignment (HCAL endcap ~2.5% and
+   barrels 0.2-0.5% of cells land in the neighbouring face), and the layer-wise energy-fraction
+   metric the plan names (line 356) — the projection makes it computable but nobody has written it.
 2. **Cell-level metric.** ~~Blocked on (1)~~ **UNBLOCKED 2026-09-15** — `src/genpu/calo_cells.py`
    snaps every calo point to a real cell centre: **99.698%** of 4.29M real cell-hits land within
    10 um, ECAL endcap ids bijective (ratio 1.0000).
