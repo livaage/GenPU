@@ -831,7 +831,12 @@ one. 0.9357 was flattering.
   [entry](experiment-memory/2026-09-15-calo-snap-to-cell-built-and-barrel-gap2-RETRACTED.md)
 - ~~Wire `snap_cells` in~~ **DONE** (`--snap_cells`, job 13929818). Remaining: a cell-level metric
   proper (occupancy, energy-per-cell against real cells).
-- **The generator OVER-concentrates** (collision 0.0361 vs a real floor of 0.0003) — probe where the
+- **Collisions: core-localised, and NOT a density excess** (2026-09-16, job 13976736) — generated NN
+  spacing is 2.14x REAL (0.00674 vs 0.00314), so the cloud is sparser yet collides 120x more:
+  independent per-cell draws, not core density. Density tuning RULED OUT. Caveat: 2-D statistic,
+  real cells stack in depth; per-layer 3-D NN would split that.
+  [entry](experiment-memory/2026-09-16-calo-nn-spacing-generated-is-SPARSER.md)
+- ~~**The generator OVER-concentrates**~~ (superseded above; kept for history) — probe where the
   collisions sit; the shower CORE is the candidate. Needs generated cells, so a GPU job. If it is the
   core, `PointCFM` controls that directly and it is testable by resampling, no retrain.
   Do NOT "fix" the merge: merging is the correct response to two deposits in one channel, the error
