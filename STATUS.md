@@ -2,7 +2,7 @@
 
 Rolling state. Append-only detail lives in `experiment-memory/`. See also `TRACKER_GATE_FINDINGS.md`.
 
-_Last updated: 2026-09-15_
+_Last updated: 2026-09-29_
 
 ## Current best
 - **Tracker: v3 surface-local + scheduled sampling BEATS the v1 deliverable.** Honest full-event
@@ -819,7 +819,36 @@ one. 0.9357 was flattering.
 > `d_eta` was untouched while `d_phi` blew up 12x — one of two symmetric coordinates breaking alone
 > is a coordinate bug, not physics.
 
+## CALO A-PRIME (2026-09-28) — attention gives coherence, then COLLIDES 4x; gate barely moves
+[Entry](experiment-memory/2026-09-28-calo-aprime-attention-gives-coherence-but-collides-4x.md) ·
+commit `2604c3f` · jobs 14615599/14616716 (reproduce 13978193) · 60k, seed 0, all 17 classes, `--snap_cells`.
+- **Gate: baseline 0.945 / self-only 0.905 / cross 0.936.** One model seed each, and model-seed noise has
+  reached 0.11 on this gate, so the ordering is unconfirmed.
+- **Cross delivers the mechanism**: hadron coherence 1.99 vs real 1.92 (baseline 0.87), NN spacing 1.08
+  (was 2.06), copula half 0.787 -> **0.586**. First generator to reproduce within-shower structure.
+- **But collisions went UP 0.036 -> 0.130** (pre-registered: -> 0.0003), 13% of points merge, and the
+  defect moved to the MARGINALS (0.963): `logE_p90` 0.84, `logE_mean` 0.84, `cells_per_src` 0.69, which is
+  what merging would do. **CONFIRMED 2026-09-29** (job 14674540,
+  [entry](experiment-memory/2026-09-29-calo-aprime-merge-explains-cross-gate-CONFIRMED.md)): without the
+  snap those three fall to **0.525 / 0.576 / 0.507** and cross's gate is **0.787** vs self-only 0.894 and
+  baseline 0.935. That is an UPPER BOUND (unmerged points are scored as distinct cells); the deliverable
+  stays 0.936 until collisions are fixed upstream. `width_std` ~0.67 is shared by all arms.
+- **REACHABLE (2026-09-29, job 14675671,
+  [entry](experiment-memory/2026-09-29-calo-aprime-collision-resolver-recovers-full-gate.md))**: a collision
+  resolver (`--resolve_collisions`: loser moves to the nearest free same-layer neighbour, ~1 pitch) gives
+  cross a MERGED gate of **0.7867** (unmerged 0.7866), self-only 0.894, baseline 0.935. No widening.
+  **Caveat**: the gate's features cannot see a 1-pitch move, so this proves exclusion recovers the gate,
+  NOT that the resolver's placements are realistic. NN spacing / coherence on resolved cells unmeasured.
+- **Self-only** loses on `frac_near_floor` 0.78 (near-floor band 0.024 vs 0.030, from zero-suppression) and
+  shows **unexplained coherence 1.29** with cells blind to each other.
+- Cost ~5.8x slower (36 -> ~205 µs/particle). Val flow loss flat from ~20k steps; likelihood still improving.
+
 ## Open threads
+- **A-prime needs EXCLUSION** (confirmed 2026-09-29) — merging explains cross's whole gate penalty, and a
+  post-hoc resolver recovers all of it (0.936 -> 0.787 merged). OPEN DECISION: is the resolver acceptable
+  as the projection step? First check NN spacing + coherence on RESOLVED cross cells; if they survive, it
+  is defensible, else learn exclusion (cell tokens; HCAL-endcap grid gates that). Then: self-only's 1.29
+  coherence; second model seed of self-only vs cross.
 - **HCAL endcap cell geometry** (2026-09-15, v3) — pitch is settled (29.9894, IQR 0.0056 at layer 0)
   and projective towers are falsified, yet **layer 0 still leaves 12% of cells off-grid on adequate
   statistics**, concentrated in specific sectors. Work at LAYER 0 ONLY — deeper layers' instability

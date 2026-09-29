@@ -315,6 +315,17 @@ decomposition's `full` has 10 features instead of 12 — **compare `event_gate_a
 across the flag.** The JSON carries `cell_projection` (merged fraction, energy ratio, co-occupancy).
 First result: `event_gate_auc` 0.9357 -> 0.9458, cost entirely in energy features.
 
+**`--resolve_collisions` (2026-09-29, opt-in, needs `--snap_cells`)** runs
+`calo_cells.resolve_collisions` before the merge: in each (cell, shower) the highest-energy point keeps
+the cell, every other point moves to the nearest FREE in-plane neighbour (same layer, <= 2 pitches,
+nearest to its own continuous position); points with no free neighbour are merged as before. Energy is
+conserved exactly; `cell_projection.resolve` in the JSON reports collided / moved / fallback-merged counts
+and mean move in pitches. **It edits placement**, so it is a diagnostic, not part of the generator. What
+it can and cannot show: the gate's 10 features are per-event energy and width aggregates and are blind to
+a 1-pitch move, so resolved-merged equals unmerged to ~1e-4 on every arm (job 14675671). It shows that
+exclusion preserving count and per-cell energy recovers the gate. It says NOTHING about whether the moved
+placements are realistic (NN spacing, coherence).
+
 **The composite gate saturates.** Fixing the 128 cap moved five marginals toward chance and both the
 marginal (0.842 -> 0.743) and copula (0.845 -> 0.776) halves, while `event_gate_auc` stayed flat
 (0.933 -> 0.936). Near 0.95 the classifier has redundant paths; report the decomposition, not only the

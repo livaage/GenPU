@@ -79,6 +79,11 @@ def main():
                          "cell id 0.9925 of the time, energy conserved to 1e-6, and within one event "
                          "the id map collides on only 0.0004. OFF by default so numbers stay "
                          "comparable to pre-2026-09-15 runs.")
+    ap.add_argument("--resolve_collisions", action="store_true",
+                    help="with --snap_cells: move a point that collides with a higher-energy point of "
+                         "its shower to the nearest FREE in-plane neighbour cell before merging "
+                         "(genpu.calo_cells.resolve_collisions). A DIAGNOSTIC for whether collisions "
+                         "explain the merged gate (2026-09-29), not a generator component.")
     ap.add_argument("--max_cells", type=int, default=128,
                     help="cap on generated cells per shower. The historical default 128 truncates "
                          "2.10%% of real showers / 6.87%% of all cells on multispecies_v2 and is "
@@ -294,7 +299,8 @@ def main():
             raise SystemExit("--snap_cells needs a 3-D model (the depth column carries the layer)")
         from genpu.calo_cells import snap_and_merge
         n_before = len(gen_E)
-        sm = snap_and_merge(gen_eta, gen_phi, gen_depth, gen_E, src=gen_src)
+        sm = snap_and_merge(gen_eta, gen_phi, gen_depth, gen_E, src=gen_src,
+                            resolve=args.resolve_collisions)
         gen_eta_s = np.arcsinh(sm["z"] / np.maximum(np.hypot(sm["x"], sm["y"]), 1e-9))
         gen_phi_s = np.arctan2(sm["y"], sm["x"])
         e_before = gen_E.sum()
@@ -307,10 +313,13 @@ def main():
         snap_report = {"cells_before": int(n_before), "cells_after": int(len(gen_E)),
                        "merged_frac": round(1 - len(gen_E) / max(n_before, 1), 5),
                        "energy_ratio": round(float(gen_E.sum() / max(e_before, 1e-12)), 6),
-                       "multi_contrib_frac": round(float(np.mean(sm["n_merged"] > 1)), 5)}
+                       "multi_contrib_frac": round(float(np.mean(sm["n_merged"] > 1)), 5),
+                       "resolve": sm.get("resolve")}
         print(f"cell projection: {n_before:,} points -> {len(gen_E):,} cells "
               f"(merged {snap_report['merged_frac']:.4f}), energy x{snap_report['energy_ratio']:.6f}, "
               f"cells with >1 contributor {snap_report['multi_contrib_frac']:.4f}")
+        if sm.get("resolve"):
+            print(f"  collision resolve: {sm['resolve']}")
         print("  NOTE depth observables are SKIPPED under --snap_cells (the snapped depth is a "
               "layer index, not the continuous coordinate the real reference carries).")
 

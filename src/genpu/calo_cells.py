@@ -261,7 +261,113 @@ def cell_ids(x, y, z, det):
     return (det << 56) | (a << 51) | (b << 44) | ((c + 2 ** 21) << 22) | (d + 2 ** 21)
 
 
-def snap_and_merge(eta, phi, depth, energy, src=None, front_face=None):
+def _inplane_offset(x, y, det, i, j):
+    """(dx, dy, dz) that moves a point by (i, j) cell pitches along its sub-detector's two IN-PLANE
+    cell axes -- the same axes `snap_endcap` / `snap_barrel` round on, so the result snaps to the
+    (i, j) neighbour (or across a face boundary, which the snap then handles). Depth is untouched.
+      endcap: u = (cos th, sin th), v = (-sin th, cos th), both transverse; depth is z
+      barrel: along = (-sin th, cos th) and global z; depth is the stave normal
+    """
+    th = face_angle(face_index(x, y))
+    c, s = np.cos(th), np.sin(th)
+    pitch = np.select([np.isin(det, (ECAL_NEG_ENDCAP, ECAL_POS_ENDCAP, ECAL_BARREL))], [5.1], 30.0)
+    barrel = np.isin(det, BARREL_DETS)
+    dx = np.where(barrel, -i * s, i * c - j * s) * pitch
+    dy = np.where(barrel, i * c, i * s + j * c) * pitch
+    dz = np.where(barrel, j * pitch, 0.0)
+    return dx, dy, dz
+
+
+def resolve_collisions(x, y, z, det, energy, src, radius=2):
+    """DIAGNOSTIC exclusion, not a model: move points that collide with a higher-energy point of the
+    same shower to the nearest FREE in-plane neighbour cell (same layer, within `radius` pitches).
+
+    Built 2026-09-29 to test whether removing collisions recovers the unmerged gate (A-prime cross:
+    0.787 unmerged vs 0.936 merged). Rule: in each (cell, shower) the highest-energy point keeps the
+    cell; every other point tries the (2r+1)^2 - 1 neighbours in order of distance from its OWN
+    continuous position, and takes the first one no point of its shower occupies. Greedy by
+    candidate rank; within a rank, conflicts go to the higher energy. Points with no free neighbour
+    keep their cell and are merged by the caller as before, so energy is conserved exactly and the
+    fallback is today's behaviour.
+
+    Returns (xs, ys, zs, cid, info) for every input point.
+    """
+    x = np.asarray(x, float); y = np.asarray(y, float); z = np.asarray(z, float)
+    det = np.asarray(det, np.int64); energy = np.asarray(energy, float)
+    src = np.asarray(src, np.int64)
+    xs, ys, zs, _ = snap_cells(x, y, z, det)
+    cid = cell_ids(xs, ys, zs, det)
+    n = len(x)
+
+    # keeper = highest energy per (cell, shower): sort by (cid, src, -E), first of each run
+    order = np.lexsort((-energy, src, cid))
+    cs, ss = cid[order], src[order]
+    new_run = np.ones(n, bool)
+    new_run[1:] = (cs[1:] != cs[:-1]) | (ss[1:] != ss[:-1])
+    disp = np.zeros(n, bool)
+    disp[order[~new_run]] = True
+    D = np.flatnonzero(disp)
+    info = {"n_points": int(n), "n_collided": int(len(D))}
+    if len(D) == 0:
+        info.update(n_moved=0, n_fallback_merged=0, moved_frac=0.0, mean_move_pitch=0.0)
+        return xs, ys, zs, cid, info
+
+    offs = [(i, j) for i in range(-radius, radius + 1) for j in range(-radius, radius + 1) if (i, j) != (0, 0)]
+    K = len(offs)
+    cand_c = np.empty((len(D), K), np.int64)
+    cand_d = np.empty((len(D), K), float)
+    cand_xyz = np.empty((len(D), K, 3), float)
+    xd, yd, zd, dd = x[D], y[D], z[D], det[D]
+    for k, (i, j) in enumerate(offs):
+        dx, dy, dz = _inplane_offset(xd, yd, dd, i, j)
+        cx, cy, cz, _ = snap_cells(xd + dx, yd + dy, zd + dz, dd)
+        cand_c[:, k] = cell_ids(cx, cy, cz, dd)
+        cand_d[:, k] = np.sqrt((cx - xd) ** 2 + (cy - yd) ** 2 + (cz - zd) ** 2)
+        cand_xyz[:, k] = np.stack([cx, cy, cz], 1)
+    # a neighbour that snaps back into the ORIGINAL cell (face-edge rounding) is not a move
+    cand_d[cand_c == cid[D][:, None]] = np.inf
+    rank = np.argsort(cand_d, axis=1)
+
+    # compact (cell, shower) keys: cell ids -> dense index over every id that can occur
+    all_c, inv = np.unique(np.concatenate([cid, cand_c.ravel()]), return_inverse=True)
+    S = int(src.max()) + 1
+    key_pt = inv[:n].astype(np.int64) * S + src
+    key_cand = inv[n:].reshape(len(D), K).astype(np.int64) * S + src[D][:, None]
+    occupied = np.unique(key_pt[~disp])
+
+    assigned = np.full(len(D), -1, np.int64)
+    by_e = np.argsort(-energy[D], kind="stable")        # within a rank, higher energy claims first
+    for r in range(K):
+        todo = by_e[assigned[by_e] < 0]
+        if len(todo) == 0:
+            break
+        kk = rank[todo, r]
+        ok = np.isfinite(cand_d[todo, kk])
+        todo, kk = todo[ok], kk[ok]
+        keys = key_cand[todo, kk]
+        free = ~np.isin(keys, occupied, assume_unique=False)
+        todo, kk, keys = todo[free], kk[free], keys[free]
+        _, first = np.unique(keys, return_index=True)   # `todo` is energy-ordered -> first wins
+        win = todo[first]
+        assigned[win] = kk[first]
+        occupied = np.union1d(occupied, keys[first])
+
+    m = assigned >= 0
+    P, A = D[m], assigned[m]
+    x0, y0, z0 = xs, ys, zs
+    xs, ys, zs, cid = xs.copy(), ys.copy(), zs.copy(), cid.copy()
+    xs[P], ys[P], zs[P] = cand_xyz[m, A, 0], cand_xyz[m, A, 1], cand_xyz[m, A, 2]
+    cid[P] = cand_c[m, A]
+    # move size is cell-centre to cell-centre (from the point's ORIGINAL cell), in cell pitches
+    pitch = np.where(np.isin(det[P], (ECAL_NEG_ENDCAP, ECAL_POS_ENDCAP, ECAL_BARREL)), 5.1, 30.0)
+    step = np.sqrt((xs[P] - x0[P]) ** 2 + (ys[P] - y0[P]) ** 2 + (zs[P] - z0[P]) ** 2) / pitch
+    info.update(n_moved=int(m.sum()), n_fallback_merged=int((~m).sum()),
+                moved_frac=round(float(m.sum()) / n, 5),
+                mean_move_pitch=round(float(step.mean()) if m.any() else 0.0, 3))
+    return xs, ys, zs, cid, info
+
+
+def snap_and_merge(eta, phi, depth, energy, src=None, front_face=None, resolve=False):
     """Snap generated points to cells and MERGE points that land in the same cell.
 
     Merging is not optional. Two generated points in one cell must ADD their energy -- a cell is a
@@ -273,12 +379,21 @@ def snap_and_merge(eta, phi, depth, energy, src=None, front_face=None):
     `src` (shower index per point) is merged WITHIN a shower when given. Pass None to merge across
     the whole event, which is what a full-event generator wants.
 
+    `resolve=True` (needs `src`) first moves colliding points to free neighbour cells via
+    `resolve_collisions` -- a DIAGNOSTIC, see there -- and returns its counts under "resolve".
+
     Returns a dict with the merged cells: x, y, z, det, cell_id, energy, and (when src was given)
     src for the surviving cells.
     """
     x, y, z, det = etaphidepth_to_xyz(eta, phi, depth, front_face)
-    xs, ys, zs, _ = snap_cells(x, y, z, det)
-    cid = cell_ids(xs, ys, zs, det)
+    res_info = None
+    if resolve:
+        if src is None:
+            raise ValueError("resolve=True needs src (collisions are resolved within a shower)")
+        xs, ys, zs, cid, res_info = resolve_collisions(x, y, z, det, energy, src)
+    else:
+        xs, ys, zs, _ = snap_cells(x, y, z, det)
+        cid = cell_ids(xs, ys, zs, det)
     if src is None:
         uniq, inv = np.unique(cid, return_inverse=True)
     else:
@@ -296,4 +411,6 @@ def snap_and_merge(eta, phi, depth, energy, src=None, front_face=None):
            "cell_id": cid[first], "energy": e, "n_merged": np.bincount(inv, minlength=len(uniq))}
     if src is not None:
         out["src"] = np.asarray(src)[first]
+    if res_info is not None:
+        out["resolve"] = res_info
     return out
